@@ -36,15 +36,23 @@ os.makedirs("logs", exist_ok=True)
 def get_openai_client():
     global openai_client
     if openai_client is None and openai_api_key:
-        from openai import OpenAI
-        openai_client = OpenAI(api_key=openai_api_key)
+        try:
+            from openai import OpenAI
+            openai_client = OpenAI(api_key=openai_api_key)
+        except Exception as e:
+            print(f"Error initializing OpenAI client: {e}")
+            return None
     return openai_client
 
 def get_claude_client():
     global claude_client
     if claude_client is None and claude_api_key:
-        from anthropic import Anthropic
-        claude_client = Anthropic(api_key=claude_api_key)
+        try:
+            from anthropic import Anthropic
+            claude_client = Anthropic(api_key=claude_api_key)
+        except Exception as e:
+            print(f"Error initializing Claude client: {e}")
+            return None
     return claude_client
 
 # Save/Load logs
@@ -83,7 +91,7 @@ def call_model(model, system, prompt):
         if "gpt" in model:
             client = get_openai_client()
             if not client:
-                return "Error: OpenAI API key not configured"
+                return "Error: OpenAI API key not configured or client failed to initialize"
             response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}]
@@ -92,7 +100,7 @@ def call_model(model, system, prompt):
         else:
             client = get_claude_client()
             if not client:
-                return "Error: Claude API key not configured"
+                return "Error: Claude API key not configured or client failed to initialize"
             response = client.messages.create(
                 model=model,
                 max_tokens=config.get("max_tokens", 1024),
@@ -174,7 +182,7 @@ def clear():
 def get_log():
     return jsonify(chat_history)
 
-# Health check endpoint for Railway
+# Health check endpoint
 @app.route("/health")
 def health():
     return jsonify({
