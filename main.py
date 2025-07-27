@@ -129,13 +129,18 @@ def clear():
 def get_log():
     return jsonify(chat_history)
 
+# Health check endpoint for Railway
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy"})
+
 if __name__ == "__main__":
     load_chat_log()
-    port = int(os.getenv("PORT", 5000))  # Railway sets PORT automatically
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # For local development only
+    app.run(host="0.0.0.0", port=5000, debug=True)
 else:
+    # For production
     load_chat_log()
     application = app
-
     
 
