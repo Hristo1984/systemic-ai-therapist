@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Therapeutic AI Co-Therapist</title>
+  <style>
+    body {
+      background-color: #121212;
+      color: #ffffff;
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    input, select, button, textarea {
+      font-size: 1em;
+      margin: 5px 0;
+    }
+    textarea {
+      width: 100%;
+      height: 100px;
+    }
+    select, button {
+      padding: 5px;
+    }
+    .controls {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Therapeutic AI Co-Therapist</h1>
+
+  <div id="chat-box"></div>
+
+  <form id="chat-form">
+    <textarea id="user-input" placeholder="Enter your message..."></textarea><br>
+
+    <input type="file" id="pdf-upload" name="pdf" accept="application/pdf">
+    <button type="button" id="upload-btn">Upload PDF</button><br>
+
+    <select id="agent-select">
+      <option value="therapist">🧠 Therapist (Claude)</option>
+      <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
+      <option value="research_critic">🧐 Research Critic (GPT)</option>
+      <option value="therapy_planner">📋 Therapy Planner (Hybrid)</option>
+    </select><br>
+
+    <div class="controls">
+      <button type="submit">Send</button>
+      <button type="button" id="clear-btn">Clear Memory</button>
+      <button type="button" id="download-btn">Download Chat</button>
+      <button type="button" id="feedback-btn">Send Feedback</button>
+    </div>
+
+    <label><input type="checkbox" id="voice-toggle"> 🔊 Voice Output</label>
+    <select id="voice-select"></select>
+  </form>
+
+  <script>
+    const chatBox = document.getElementById('chat-box');
+    const chatForm = document.getElementById('chat-form');
+    const userInput = document.getElementById('user-input');
+    const agentSelect = document.getElementById('agent-select');
+    const uploadBtn = document.getElementById('upload-btn');
+    const pdfUpload = document.getElementById('pdf-upload');
+    const voiceToggle = document.getElementById('voice-toggle');
+    const voiceSelect = document.getElementById('voice-select');
+
+    // Voice options
+    let voices = [];
+    function loadVoices() {
+      voices = window.speechSynthesis.getVoices();
+      voiceSelect.innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join('');
+    }
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    loadVoices();
+
+    // Upload PDF
+    uploadBtn.addEventListener("click", async () => {
+      const file = pdfUpload.files[0];
+      if (!file) return alert("Please choose a PDF file.");
+
+      const formData = new FormData();
+      formData.append("pdf", file);
+
+      const response = await fetch("/upload", {
+        method: "POST",
+        body: formData
+      });
+
+      if (response.redirected) window.location.href = response.url;
+    });
+
+    // Send chat
+    chatForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = userInput.value;
+      if (!input.trim()) return;
+
+      const agent = agentSelect.value;
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_input: input, agent })
+      });
+      const data = await res.json();
+
+      chatBox.innerHTML += `<p><strong>You:</strong> ${input}</p>`;
+      chatBox.innerHTML += `<p><strong>Bot:</strong> ${data.response}</p>`;
+      userInput.value = "";
+
+      // Voice output
+      if (voiceToggle.checked) {
+        const utter = new SpeechSynthesisUtterance(data.response);
+        const selectedVoice = voices.find(v => v.name === voiceSelect.value);
+        if (selectedVoice) utter.voice = selectedVoice;
+        window.speechSynthesis.speak(utter);
+      }
+    });
+
+    document.getElementById("clear-btn").addEventListener("click", async () => {
+      await fetch("/clear", { method: "POST" });
+      chatBox.innerHTML = "";
+    });
+
+    document.getElementById("download-btn").addEventListener("click", async () => {
+      const res = await fetch("/log");
+      const log = await res.json();
+      const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "chat_history.json";
+      link.click();
+    });
+
+    document.getElementById("feedback-btn").addEventListener("click", () => {
+      alert("Thank you for your feedback!");
+    });
+  </script>
+</body>
+</html>
+
+
