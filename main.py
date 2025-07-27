@@ -1,6 +1,6 @@
 import os
 import json
-import fitz
+# import fitz  # Commented out for now
 from flask import Flask, request, render_template, jsonify, redirect
 from openai import OpenAI
 from anthropic import Anthropic
@@ -52,18 +52,10 @@ def load_chat_log():
         print(f"Error loading chat log: {e}")
         chat_history = []
 
-# PDF extraction
+# PDF extraction - Temporarily disabled
 def extract_text_from_pdf(file_path):
-    try:
-        doc = fitz.open(file_path)
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
-        return text
-    except Exception as e:
-        print(f"Error extracting PDF text: {e}")
-        return ""
+    # TODO: Re-enable when PyMuPDF compilation is fixed
+    return "PDF upload temporarily disabled - coming soon!"
 
 # Intelligent model switching
 def get_model(user_input):
@@ -144,10 +136,8 @@ def upload():
             return redirect("/")
         file = request.files["pdf"]
         if file and file.filename.endswith(".pdf"):
-            os.makedirs("uploads", exist_ok=True)
-            path = os.path.join("uploads", file.filename)
-            file.save(path)
-            pdf_text_memory = extract_text_from_pdf(path)
+            # Temporarily return message instead of processing
+            pdf_text_memory = "PDF processing temporarily disabled - coming soon!"
         return redirect("/")
     except Exception as e:
         print(f"Error in upload endpoint: {e}")
@@ -175,7 +165,8 @@ def health():
     return jsonify({
         "status": "healthy",
         "openai_configured": openai_client is not None,
-        "claude_configured": claude_client is not None
+        "claude_configured": claude_client is not None,
+        "pdf_support": False  # Temporarily disabled
     })
 
 if __name__ == "__main__":
@@ -186,4 +177,3 @@ else:
     # For production
     load_chat_log()
     application = app
-
