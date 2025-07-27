@@ -49,7 +49,8 @@ def get_claude_client():
     if claude_client is None and claude_api_key:
         try:
             from anthropic import Anthropic
-            claude_client = Anthropic(api_key=claude_api_key)
+            claude_client = Anthropic()
+            claude_client.api_key = claude_api_key  # <- This line is essential
         except Exception as e:
             print(f"Error initializing Claude client: {e}")
             return None
