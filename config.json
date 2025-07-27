@@ -1,0 +1,14 @@
+{
+  "default_model": "claude",
+  "auto_model_switching": true,
+  "keywords_for_openai": [
+    "explain", "fact", "date", "correct", "calculate",
+    "history", "source", "science", "law", "framework", "define",
+    "how many", "what year", "summary", "statistics"
+  ],
+  "claude_model": "claude-3-haiku-20240307",
+  "openai_model": "gpt-4",
+  "claude_system_prompt": "You are a warm, reflective systemic co-therapist with a postmodern, constructivist lens.",
+  "openai_system_prompt": "You are a structured, clear-thinking assistant who supports your co-therapist by organising thoughts, correcting factual errors, and helping them make sense of patterns.",
+  "max_tokens": 1024
+}
