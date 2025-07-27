@@ -2,8 +2,6 @@ import os
 import json
 # import fitz  # Commented out for now
 from flask import Flask, request, render_template, jsonify, redirect
-from openai import OpenAI
-from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,9 +20,9 @@ if not openai_api_key:
 if not claude_api_key:
     print("WARNING: CLAUDE_API_KEY not found in environment variables")
 
-# Clients (only initialize if keys are available)
-openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
-claude_client = Anthropic(api_key=claude_api_key) if claude_api_key else None
+# Global client variables (initialized later)
+openai_client = None
+claude_client = None
 
 # Globals
 chat_history = []
@@ -33,6 +31,21 @@ pdf_text_memory = ""
 # Log file
 LOG_FILE = "logs/chat_history.json"
 os.makedirs("logs", exist_ok=True)
+
+# Initialize clients only when needed
+def get_openai_client():
+    global openai_client
+    if openai_client is None and openai_api_key:
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=openai_api_key)
+    return openai_client
+
+def get_claude_client():
+    global claude_client
+    if claude_client is None and claude_api_key:
+        from anthropic import Anthropic
+        claude_client = Anthropic(api_key=claude_api_key)
+    return claude_client
 
 # Save/Load logs
 def save_chat_log():
@@ -68,17 +81,19 @@ def get_model(user_input):
 def call_model(model, system, prompt):
     try:
         if "gpt" in model:
-            if not openai_client:
+            client = get_openai_client()
+            if not client:
                 return "Error: OpenAI API key not configured"
-            response = openai_client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}]
             )
             return response.choices[0].message.content
         else:
-            if not claude_client:
+            client = get_claude_client()
+            if not client:
                 return "Error: Claude API key not configured"
-            response = claude_client.messages.create(
+            response = client.messages.create(
                 model=model,
                 max_tokens=config.get("max_tokens", 1024),
                 system=system,
@@ -164,8 +179,8 @@ def get_log():
 def health():
     return jsonify({
         "status": "healthy",
-        "openai_configured": openai_client is not None,
-        "claude_configured": claude_client is not None,
+        "openai_configured": openai_api_key is not None,
+        "claude_configured": claude_api_key is not None,
         "pdf_support": False  # Temporarily disabled
     })
 
