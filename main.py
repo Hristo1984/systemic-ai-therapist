@@ -135,3 +135,5 @@ if __name__ == "__main__":
 else:
     load_chat_log()
     application = app
+    
+
