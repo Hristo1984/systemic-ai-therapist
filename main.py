@@ -131,9 +131,11 @@ def get_log():
 
 if __name__ == "__main__":
     load_chat_log()
-    app.run(debug=True)
+    port = int(os.getenv("PORT", 5000))  # Railway sets PORT automatically
+    app.run(host="0.0.0.0", port=port, debug=True)
 else:
     load_chat_log()
     application = app
+
     
 
