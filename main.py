@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import hashlib
+import fitz  # PyMuPDF - ADD THIS IMPORT
 from datetime import datetime
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
@@ -59,11 +60,31 @@ def save_knowledge_base(knowledge_base):
 
 knowledge_base = load_knowledge_base()
 
-# Extract text from PDF (placeholder - you'll need to add PyMuPDF back later)
+# UPDATED: Extract text from PDF using PyMuPDF
 def extract_text_from_pdf(file_path):
-    # TODO: Re-add PyMuPDF when compilation is fixed
-    # For now, return placeholder
-    return f"PDF text extraction placeholder for: {os.path.basename(file_path)}"
+    """Extract text from PDF using PyMuPDF"""
+    try:
+        print(f"Extracting text from PDF: {file_path}")
+        doc = fitz.open(file_path)
+        text = ""
+        
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            page_text = page.get_text()
+            text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+        
+        doc.close()
+        
+        if text.strip():
+            print(f"Successfully extracted {len(text)} characters from {os.path.basename(file_path)}")
+            return text
+        else:
+            return f"No text could be extracted from {os.path.basename(file_path)}"
+            
+    except Exception as e:
+        error_msg = f"Error extracting text from PDF {os.path.basename(file_path)}: {str(e)}"
+        print(error_msg)
+        return error_msg
 
 def add_document_to_knowledge_base(file_path, filename, is_core=True):
     """Add document to permanent knowledge base (admin only) or temporary session"""
@@ -75,7 +96,8 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
             "content": text_content,
             "added_date": datetime.now().isoformat(),
             "file_hash": hashlib.md5(open(file_path, 'rb').read()).hexdigest(),
-            "is_core": is_core
+            "is_core": is_core,
+            "character_count": len(text_content)
         }
         
         if is_core:
@@ -83,7 +105,7 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
             knowledge_base["documents"].append(doc_info)
             knowledge_base["total_documents"] = len(knowledge_base["documents"])
             save_knowledge_base(knowledge_base)
-            print(f"Added {filename} to core knowledge base")
+            print(f"Added {filename} to core knowledge base ({len(text_content)} characters)")
         
         return doc_info
     except Exception as e:
@@ -187,16 +209,16 @@ def build_context_from_knowledge_base(session_id):
     if knowledge_base["documents"]:
         context += "\n=== CORE KNOWLEDGE BASE ===\n"
         for doc in knowledge_base["documents"][-3:]:  # Last 3 core documents
-            context += f"From {doc['filename']}:\n{doc['content'][:1000]}...\n\n"
+            context += f"From {doc['filename']}:\n{doc['content'][:1500]}...\n\n"
     
     # Add user session documents
     user_session = get_user_session(session_id)
     if user_session["temp_documents"]:
         context += "\n=== SESSION DOCUMENTS ===\n"
         for doc in user_session["temp_documents"]:
-            context += f"From {doc['filename']}:\n{doc['content'][:500]}...\n\n"
+            context += f"From {doc['filename']}:\n{doc['content'][:800]}...\n\n"
     
-    return context[:4000]  # Limit total context
+    return context[:5000]  # Increased limit for more context
 
 # Intelligent model switching with knowledge base
 def get_model(user_input):
@@ -284,6 +306,7 @@ def chat():
         print(f"Error in chat endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
+# UPDATED: Upload route with better error handling
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
@@ -291,19 +314,28 @@ def upload():
         user_session = get_user_session(session_id)
         
         if "pdf" not in request.files:
-            return redirect("/")
+            return jsonify({"message": "No file selected", "success": False})
         
         file = request.files["pdf"]
-        if file and file.filename.endswith(".pdf"):
-            is_admin = session.get("is_admin", False)
+        if not file or not file.filename:
+            return jsonify({"message": "No file selected", "success": False})
             
+        if not file.filename.lower().endswith(".pdf"):
+            return jsonify({"message": "Please select a PDF file", "success": False})
+        
+        is_admin = session.get("is_admin", False)
+        
+        try:
             if is_admin:
                 # Admin upload - goes to core knowledge base
                 file_path = os.path.join(UPLOADS_DIR, file.filename)
                 file.save(file_path)
                 doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
                 if doc_info:
-                    return jsonify({"message": f"Added {file.filename} to core knowledge base", "success": True})
+                    return jsonify({
+                        "message": f"Added '{file.filename}' to core knowledge base ({doc_info['character_count']} characters)", 
+                        "success": True
+                    })
             else:
                 # User upload - temporary session only
                 file_path = os.path.join(USER_UPLOADS_DIR, f"{session_id}_{file.filename}")
@@ -311,9 +343,16 @@ def upload():
                 doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=False)
                 if doc_info:
                     user_session["temp_documents"].append(doc_info)
-                    return jsonify({"message": f"Added {file.filename} to your session (temporary)", "success": True})
+                    return jsonify({
+                        "message": f"Added '{file.filename}' to your session ({doc_info['character_count']} characters)", 
+                        "success": True
+                    })
+            
+            return jsonify({"message": "Upload processing failed", "success": False})
+            
+        except Exception as file_error:
+            return jsonify({"message": f"Error processing file: {str(file_error)}", "success": False})
         
-        return jsonify({"message": "Upload failed", "success": False})
     except Exception as e:
         print(f"Error in upload endpoint: {e}")
         return jsonify({"error": str(e), "success": False})
@@ -342,7 +381,7 @@ def get_knowledge_base():
     return jsonify({
         "total_documents": len(knowledge_base["documents"]),
         "last_updated": knowledge_base.get("last_updated"),
-        "documents": [{"filename": doc["filename"], "added_date": doc["added_date"]} 
+        "documents": [{"filename": doc["filename"], "added_date": doc["added_date"], "character_count": doc.get("character_count", 0)} 
                      for doc in knowledge_base["documents"]]
     })
 
@@ -374,8 +413,8 @@ def health():
         "claude_configured": claude_api_key is not None,
         "claude_client_works": claude_works,
         "knowledge_base_documents": len(knowledge_base["documents"]),
-        "pdf_support": False,
-        "note": "Using direct API calls for both Claude and OpenAI"
+        "pdf_support": True,  # Now enabled!
+        "note": "Using direct API calls for both Claude and OpenAI with PyMuPDF support"
     })
 
 if __name__ == "__main__":
