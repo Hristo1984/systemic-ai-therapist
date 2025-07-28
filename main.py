@@ -60,6 +60,11 @@ def save_knowledge_base(knowledge_base):
 
 knowledge_base = load_knowledge_base()
 
+# SECURITY: Add admin check function
+def is_admin_user():
+    """Check if current user is authenticated as admin"""
+    return session.get("is_admin", False)
+
 # UPDATED: Extract text from PDF using PyMuPDF
 def extract_text_from_pdf(file_path):
     """Extract text from PDF using PyMuPDF"""
@@ -87,7 +92,7 @@ def extract_text_from_pdf(file_path):
         return error_msg
 
 def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to permanent knowledge base (admin only) or temporary session"""
+    """Add document to permanent knowledge base (admin only)"""
     try:
         text_content = extract_text_from_pdf(file_path)
         
@@ -118,13 +123,14 @@ def get_session_id():
         session['session_id'] = hashlib.md5(str(datetime.now()).encode()).hexdigest()[:16]
     return session['session_id']
 
+# UPDATED: User session without temp documents (removed user uploads)
 def get_user_session(session_id):
-    """Get user session data"""
+    """Get user session data - no temp documents anymore"""
     if session_id not in user_sessions:
         user_sessions[session_id] = {
             "chat_history": [],
-            "temp_documents": [],
             "created": datetime.now().isoformat()
+            # Removed temp_documents - no user uploads
         }
     return user_sessions[session_id]
 
@@ -201,24 +207,18 @@ def call_openai_direct(system_prompt, user_message):
         print(f"Error in direct OpenAI call: {e}")
         return f"Error: {str(e)}"
 
+# UPDATED: Build context from core knowledge only - no user documents
 def build_context_from_knowledge_base(session_id):
-    """Build context from core knowledge + user session docs"""
+    """Build context from core knowledge only - no user documents"""
     context = ""
     
-    # Add core knowledge base
+    # Only use core knowledge base (admin uploads)
     if knowledge_base["documents"]:
-        context += "\n=== CORE KNOWLEDGE BASE ===\n"
-        for doc in knowledge_base["documents"][-3:]:  # Last 3 core documents
-            context += f"From {doc['filename']}:\n{doc['content'][:1500]}...\n\n"
+        context += "\n=== THERAPEUTIC KNOWLEDGE BASE ===\n"
+        for doc in knowledge_base["documents"][-5:]:  # Last 5 core documents
+            context += f"From {doc['filename']}:\n{doc['content'][:2000]}...\n\n"
     
-    # Add user session documents
-    user_session = get_user_session(session_id)
-    if user_session["temp_documents"]:
-        context += "\n=== SESSION DOCUMENTS ===\n"
-        for doc in user_session["temp_documents"]:
-            context += f"From {doc['filename']}:\n{doc['content'][:800]}...\n\n"
-    
-    return context[:5000]  # Increased limit for more context
+    return context[:6000]  # Generous limit for therapeutic context
 
 # Intelligent model switching with knowledge base
 def get_model(user_input):
@@ -248,10 +248,12 @@ def call_model(model, system, prompt, session_id):
         print(f"Error calling model: {e}")
         return f"Error: {str(e)}"
 
+# UPDATED: Index route - pass admin status to template
 @app.route("/", methods=["GET"])
 def index():
     session_id = get_session_id()
-    return render_template("index.html")
+    is_admin = is_admin_user()
+    return render_template("index.html", is_admin=is_admin)
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
@@ -306,13 +308,17 @@ def chat():
         print(f"Error in chat endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-# UPDATED: Upload route with better error handling
+# SECURE: Upload route - admin only
 @app.route("/upload", methods=["POST"])
 def upload():
+    # SECURITY: Only admins can upload to permanent knowledge base
+    if not is_admin_user():
+        return jsonify({
+            "message": "Access denied. Only administrators can upload documents.", 
+            "success": False
+        }), 403
+    
     try:
-        session_id = get_session_id()
-        user_session = get_user_session(session_id)
-        
         if "pdf" not in request.files:
             return jsonify({"message": "No file selected", "success": False})
         
@@ -323,48 +329,31 @@ def upload():
         if not file.filename.lower().endswith(".pdf"):
             return jsonify({"message": "Please select a PDF file", "success": False})
         
-        is_admin = session.get("is_admin", False)
+        # Admin upload - goes to core knowledge base only
+        file_path = os.path.join(UPLOADS_DIR, file.filename)
+        file.save(file_path)
+        doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
         
-        try:
-            if is_admin:
-                # Admin upload - goes to core knowledge base
-                file_path = os.path.join(UPLOADS_DIR, file.filename)
-                file.save(file_path)
-                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
-                if doc_info:
-                    return jsonify({
-                        "message": f"Added '{file.filename}' to core knowledge base ({doc_info['character_count']} characters)", 
-                        "success": True
-                    })
-            else:
-                # User upload - temporary session only
-                file_path = os.path.join(USER_UPLOADS_DIR, f"{session_id}_{file.filename}")
-                file.save(file_path)
-                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=False)
-                if doc_info:
-                    user_session["temp_documents"].append(doc_info)
-                    return jsonify({
-                        "message": f"Added '{file.filename}' to your session ({doc_info['character_count']} characters)", 
-                        "success": True
-                    })
+        if doc_info:
+            return jsonify({
+                "message": f"Added '{file.filename}' to core knowledge base ({doc_info['character_count']} characters)", 
+                "success": True
+            })
+        else:
+            return jsonify({"message": "Failed to process PDF", "success": False})
             
-            return jsonify({"message": "Upload processing failed", "success": False})
-            
-        except Exception as file_error:
-            return jsonify({"message": f"Error processing file: {str(file_error)}", "success": False})
-        
     except Exception as e:
-        print(f"Error in upload endpoint: {e}")
+        print(f"Error in admin upload: {e}")
         return jsonify({"error": str(e), "success": False})
 
+# UPDATED: Clear route - no temp documents to clear
 @app.route("/clear", methods=["POST"])
 def clear():
     try:
         session_id = get_session_id()
         user_session = get_user_session(session_id)
         user_session["chat_history"] = []
-        user_session["temp_documents"] = []
-        return jsonify({"message": "Chat and session documents cleared"})
+        return jsonify({"message": "Chat history cleared"})
     except Exception as e:
         print(f"Error in clear endpoint: {e}")
         return jsonify({"error": str(e)}), 500
@@ -384,6 +373,59 @@ def get_knowledge_base():
         "documents": [{"filename": doc["filename"], "added_date": doc["added_date"], "character_count": doc.get("character_count", 0)} 
                      for doc in knowledge_base["documents"]]
     })
+
+# ADMIN: Knowledge base management
+@app.route("/admin/knowledge-base", methods=["GET"])
+def admin_knowledge_base():
+    if not is_admin_user():
+        return jsonify({"error": "Access denied"}), 403
+    
+    return jsonify({
+        "total_documents": len(knowledge_base["documents"]),
+        "last_updated": knowledge_base.get("last_updated"),
+        "documents": [
+            {
+                "filename": doc["filename"], 
+                "added_date": doc["added_date"], 
+                "character_count": doc.get("character_count", 0),
+                "file_hash": doc["file_hash"][:8]  # Short hash for identification
+            } 
+            for doc in knowledge_base["documents"]
+        ]
+    })
+
+# ADMIN: Delete document from knowledge base
+@app.route("/admin/knowledge-base/delete/<file_hash>", methods=["DELETE"])
+def delete_document(file_hash):
+    if not is_admin_user():
+        return jsonify({"error": "Access denied"}), 403
+    
+    try:
+        # Find and remove document by hash
+        for i, doc in enumerate(knowledge_base["documents"]):
+            if doc["file_hash"].startswith(file_hash):
+                removed_doc = knowledge_base["documents"].pop(i)
+                knowledge_base["total_documents"] = len(knowledge_base["documents"])
+                save_knowledge_base(knowledge_base)
+                return jsonify({
+                    "message": f"Removed '{removed_doc['filename']}' from knowledge base",
+                    "success": True
+                })
+        
+        return jsonify({"message": "Document not found", "success": False})
+        
+    except Exception as e:
+        return jsonify({"error": str(e), "success": False})
+
+# ADMIN: Dashboard route
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    if not is_admin_user():
+        return redirect("/admin")
+    
+    return render_template("admin_dashboard.html", 
+                         knowledge_base=knowledge_base,
+                         total_docs=len(knowledge_base["documents"]))
 
 @app.route("/health")
 def health():
@@ -413,8 +455,9 @@ def health():
         "claude_configured": claude_api_key is not None,
         "claude_client_works": claude_works,
         "knowledge_base_documents": len(knowledge_base["documents"]),
-        "pdf_support": True,  # Now enabled!
-        "note": "Using direct API calls for both Claude and OpenAI with PyMuPDF support"
+        "pdf_support": True,
+        "admin_only_uploads": True,  # Security feature enabled
+        "note": "Secure system: Only administrators can upload to knowledge base"
     })
 
 if __name__ == "__main__":
