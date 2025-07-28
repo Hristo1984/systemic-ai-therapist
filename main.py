@@ -13,16 +13,12 @@ with open("config.json", "r") as f:
 
 # Check for required environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
-claude_api_key = os.getenv("CLAUDE_API_KEY")
 
 if not openai_api_key:
     print("WARNING: OPENAI_API_KEY not found in environment variables")
-if not claude_api_key:
-    print("WARNING: CLAUDE_API_KEY not found in environment variables")
 
-# Global client variables (initialized later)
+# Global client variable
 openai_client = None
-claude_client = None
 
 # Globals
 chat_history = []
@@ -32,7 +28,7 @@ pdf_text_memory = ""
 LOG_FILE = "logs/chat_history.json"
 os.makedirs("logs", exist_ok=True)
 
-# Initialize clients only when needed
+# Initialize OpenAI client only when needed
 def get_openai_client():
     global openai_client
     if openai_client is None and openai_api_key:
@@ -45,21 +41,6 @@ def get_openai_client():
             print(f"Error initializing OpenAI client: {e}")
             return None
     return openai_client
-
-def get_claude_client():
-    global claude_client
-    if claude_client is None and claude_api_key:
-        try:
-            from anthropic import Anthropic
-            print(f"Attempting to create Claude client...")
-            # For Anthropic SDK 0.34.0+, pass api_key directly in constructor
-            claude_client = Anthropic(api_key=claude_api_key)
-            print("Claude client created successfully")
-        except Exception as e:
-            print(f"Error initializing Claude client: {e}")
-            print(f"Claude API key starts with: {claude_api_key[:15] if claude_api_key else 'None'}...")
-            return None
-    return claude_client
 
 # Save/Load logs
 def save_chat_log():
@@ -84,40 +65,22 @@ def extract_text_from_pdf(file_path):
     # TODO: Re-enable when PyMuPDF compilation is fixed
     return "PDF upload temporarily disabled - coming soon!"
 
-# Intelligent model switching
-def get_model(user_input):
-    for keyword in config.get("keywords_for_openai", []):
-        if keyword in user_input.lower():
-            return config["openai_model"]
-    return config["claude_model"]
-
-# Unified call
-def call_model(model, system, prompt):
+# Use OpenAI for everything now
+def call_model(system, prompt):
     try:
-        if "gpt" in model:
-            print(f"Using OpenAI model: {model}")
-            client = get_openai_client()
-            if not client:
-                return "Error: OpenAI API key not configured or client failed to initialize"
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-            )
-            return response.choices[0].message.content
-        else:
-            print(f"Using Claude model: {model}")
-            client = get_claude_client()
-            if not client:
-                return "Error: Claude API key not configured or client failed to initialize"
-            response = client.messages.create(
-                model=model,
-                max_tokens=config.get("max_tokens", 1024),
-                system=system,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
+        print(f"Using OpenAI for all responses")
+        client = get_openai_client()
+        if not client:
+            return "Error: OpenAI API key not configured or client failed to initialize"
+        
+        response = client.chat.completions.create(
+            model="gpt-4",  # Using GPT-4 for all responses
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            max_tokens=1024
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"Error calling model: {e}")
+        print(f"Error calling OpenAI: {e}")
         return f"Error: {str(e)}"
 
 @app.route("/", methods=["GET"])
@@ -136,24 +99,21 @@ def chat():
 
         chat_history.append({"role": "user", "content": user_input})
 
+        # All agents now use OpenAI with different system prompts
         if agent == "case_assistant":
-            system_prompt = "You assist with social work case analysis. Focus on context, safeguarding, and systemic risk."
-            model = config["claude_model"]
+            system_prompt = "You are a social work case analysis assistant. Focus on context, safeguarding, and systemic risk. Provide thoughtful, professional guidance for social work cases."
         elif agent == "research_critic":
-            system_prompt = "You are a critical evaluator of research. Be sharp, analytical, and cite relevant frameworks."
-            model = config["openai_model"]
+            system_prompt = "You are a critical evaluator of research. Be sharp, analytical, and cite relevant frameworks. Provide rigorous academic analysis."
         elif agent == "therapy_planner":
-            system_prompt = "You are a strategic therapist. Your job is to plan sessions and structure interventions, using systemic and psychoanalytic models."
-            model = config["openai_model"]
+            system_prompt = "You are a strategic therapist. Your job is to plan sessions and structure interventions, using systemic and psychoanalytic models. Be practical and evidence-based."
         else:
-            system_prompt = config["claude_system_prompt"]
-            model = config["claude_model"]
+            # Default therapist role
+            system_prompt = "You are a warm, reflective systemic co-therapist with a postmodern, constructivist lens. Provide empathetic, thoughtful therapeutic responses that help clients explore their experiences and relationships."
 
         if pdf_text_memory:
             system_prompt += f"\n\nReference material:\n{pdf_text_memory[:3000]}"
 
-        print(f"Selected model: {model}")
-        response_text = call_model(model, system_prompt, user_input)
+        response_text = call_model(system_prompt, user_input)
         chat_history.append({"role": "assistant", "content": response_text})
         save_chat_log()
 
@@ -193,35 +153,27 @@ def clear():
 def get_log():
     return jsonify(chat_history)
 
-# Health check endpoint - improved to test actual client creation
+# Health check endpoint
 @app.route("/health")
 def health():
     openai_works = False
-    claude_works = False
     
     # Test OpenAI client creation
     if openai_api_key:
         try:
-            test_openai = get_openai_client()
-            openai_works = test_openai is not None
+            test_client = get_openai_client()
+            openai_works = test_client is not None
         except:
             openai_works = False
-    
-    # Test Claude client creation
-    if claude_api_key:
-        try:
-            test_claude = get_claude_client()
-            claude_works = test_claude is not None
-        except:
-            claude_works = False
     
     return jsonify({
         "status": "healthy",
         "openai_configured": openai_api_key is not None,
         "openai_client_works": openai_works,
-        "claude_configured": claude_api_key is not None,
-        "claude_client_works": claude_works,
-        "pdf_support": False  # Temporarily disabled
+        "claude_configured": False,  # Temporarily disabled
+        "claude_client_works": False,  # Temporarily disabled
+        "pdf_support": False,
+        "note": "Running in OpenAI-only mode to bypass Claude SDK issues"
     })
 
 if __name__ == "__main__":
