@@ -2,7 +2,8 @@ import os
 import json
 import requests
 import hashlib
-import fitz  # PyMuPDF - ADD THIS IMPORT
+import fitz  # PyMuPDF
+import re
 from datetime import datetime
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
@@ -18,7 +19,7 @@ with open("config.json", "r") as f:
 # Check for required environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
 claude_api_key = os.getenv("CLAUDE_API_KEY")
-admin_password = os.getenv("ADMIN_PASSWORD", "admin123")  # Set this in your environment
+admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
 
 if not openai_api_key:
     print("WARNING: OPENAI_API_KEY not found in environment variables")
@@ -26,12 +27,11 @@ if not claude_api_key:
     print("WARNING: CLAUDE_API_KEY not found in environment variables")
 
 # Globals
-chat_history = []
-user_sessions = {}  # Store per-user chat history
+user_sessions = {}
 
 # File paths
-LOG_FILE = "logs/chat_history.json"
 KNOWLEDGE_BASE_FILE = "core_memory/knowledge_base.json"
+AUTHORIZED_AUTHORS_FILE = "core_memory/authorized_authors.json"
 CORE_MEMORY_DIR = "core_memory"
 UPLOADS_DIR = "uploads"
 USER_UPLOADS_DIR = "user_uploads"
@@ -40,17 +40,19 @@ USER_UPLOADS_DIR = "user_uploads"
 for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs"]:
     os.makedirs(directory, exist_ok=True)
 
-# Load knowledge base
+# CONTROLLED KNOWLEDGE SYSTEM
 def load_knowledge_base():
+    """Load ADMIN knowledge base - curated therapeutic resources"""
     try:
         if os.path.exists(KNOWLEDGE_BASE_FILE):
             with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
         print(f"Error loading knowledge base: {e}")
-    return {"documents": [], "last_updated": None, "total_documents": 0}
+    return {"documents": [], "authorized_authors": [], "last_updated": None, "total_documents": 0}
 
 def save_knowledge_base(knowledge_base):
+    """Save ADMIN knowledge base"""
     try:
         knowledge_base["last_updated"] = datetime.now().isoformat()
         with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
@@ -58,14 +60,163 @@ def save_knowledge_base(knowledge_base):
     except Exception as e:
         print(f"Error saving knowledge base: {e}")
 
+def extract_authors_from_text(text, filename):
+    """Extract author names from PDF text and filename"""
+    authors = set()
+    
+    # Common author extraction patterns
+    author_patterns = [
+        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",  # "by John Smith"
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",  # "John Smith (2020)"
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*-\s*",  # "John Smith - "
+    ]
+    
+    # Extract from filename (common format: "AuthorName - Title.pdf")
+    filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
+    if filename_match:
+        potential_author = filename_match.group(1).strip()
+        if len(potential_author.split()) >= 2:  # At least first + last name
+            authors.add(potential_author.title())
+    
+    # Extract from text content
+    for pattern in author_patterns:
+        matches = re.findall(pattern, text[:2000])  # Search first 2000 chars
+        for match in matches:
+            if len(match.split()) >= 2:  # At least first + last name
+                authors.add(match.strip())
+    
+    return list(authors)
+
+def add_document_to_knowledge_base(file_path, filename, is_core=True):
+    """Add document to ADMIN knowledge base and extract authors"""
+    try:
+        text_content = extract_text_from_pdf(file_path)
+        
+        # Extract authors from the document
+        extracted_authors = extract_authors_from_text(text_content, filename)
+        
+        doc_info = {
+            "filename": filename,
+            "content": text_content,
+            "added_date": datetime.now().isoformat(),
+            "file_hash": hashlib.md5(open(file_path, 'rb').read()).hexdigest(),
+            "is_core": is_core,
+            "character_count": len(text_content),
+            "type": "admin_therapeutic_resource",
+            "extracted_authors": extracted_authors
+        }
+        
+        # Add to global knowledge base
+        knowledge_base["documents"].append(doc_info)
+        
+        # Update authorized authors list
+        if "authorized_authors" not in knowledge_base:
+            knowledge_base["authorized_authors"] = []
+        
+        for author in extracted_authors:
+            if author not in knowledge_base["authorized_authors"]:
+                knowledge_base["authorized_authors"].append(author)
+                print(f"Added authorized author: {author}")
+        
+        knowledge_base["total_documents"] = len(knowledge_base["documents"])
+        save_knowledge_base(knowledge_base)
+        print(f"Added {filename} to knowledge base ({len(text_content)} characters)")
+        print(f"Extracted authors: {extracted_authors}")
+        
+        return doc_info
+    except Exception as e:
+        print(f"Error adding document to knowledge base: {e}")
+        return None
+
+def search_authorized_author_content(query, author_name):
+    """Search for content from authorized authors only"""
+    try:
+        print(f"Searching for content by authorized author: {author_name}")
+        
+        # This is where you'd implement web search restricted to specific authors
+        # For now, we'll return a placeholder
+        search_query = f'"{author_name}" {query} therapeutic therapy systemic'
+        
+        # TODO: Implement controlled web search
+        # Could use Google Scholar API, academic databases, or author-specific sites
+        
+        return f"[Controlled search for '{query}' by authorized author {author_name} would be implemented here]"
+        
+    except Exception as e:
+        print(f"Error searching authorized author content: {e}")
+        return None
+
+def check_knowledge_gaps(user_query):
+    """Check if query can be answered from knowledge base, or needs authorized author search"""
+    # Simple keyword matching to determine if we have relevant content
+    query_lower = user_query.lower()
+    
+    # Search through knowledge base content
+    relevant_docs = []
+    for doc in knowledge_base["documents"]:
+        doc_content_lower = doc["content"].lower()
+        
+        # Simple relevance scoring
+        relevance_score = 0
+        query_words = query_lower.split()
+        
+        for word in query_words:
+            if len(word) > 3:  # Skip short words
+                relevance_score += doc_content_lower.count(word)
+        
+        if relevance_score > 0:
+            relevant_docs.append((doc, relevance_score))
+    
+    # Sort by relevance
+    relevant_docs.sort(key=lambda x: x[1], reverse=True)
+    
+    # If we have good coverage, use knowledge base only
+    if relevant_docs and relevant_docs[0][1] > 5:
+        return "knowledge_base_sufficient", relevant_docs[:3]
+    
+    # If coverage is poor, suggest authorized author search
+    return "needs_authorized_search", relevant_docs
+
+def build_controlled_context(session_id, user_query):
+    """Build context ONLY from curated knowledge base + user docs"""
+    context = ""
+    
+    # 1. Check knowledge gaps
+    gap_status, relevant_docs = check_knowledge_gaps(user_query)
+    
+    # 2. ADMIN KNOWLEDGE BASE - Your curated content ONLY
+    if relevant_docs:
+        context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
+        for doc, score in relevant_docs:
+            context += f"From '{doc['filename']}':\n{doc['content'][:2000]}...\n\n"
+    else:
+        context += "\n=== AVAILABLE KNOWLEDGE ===\n"
+        # If no specific relevance, use recent uploads
+        for doc in knowledge_base["documents"][-3:]:
+            context += f"From '{doc['filename']}':\n{doc['content'][:1500]}...\n\n"
+    
+    # 3. USER'S PERSONAL DOCUMENTS
+    user_session = get_user_session(session_id)
+    if user_session["personal_documents"]:
+        context += "\n=== USER'S PERSONAL CONTEXT ===\n"
+        for doc in user_session["personal_documents"]:
+            context += f"From your document '{doc['filename']}':\n{doc['content'][:1000]}...\n\n"
+    
+    # 4. AUTHORIZED AUTHORS INFO
+    if knowledge_base.get("authorized_authors"):
+        context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
+        context += f"You may reference these authorized authors: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
+        
+        if gap_status == "needs_authorized_search":
+            context += "\nNOTE: If the curated knowledge base doesn't fully address this query, you may mention that additional insights could be found from the authorized authors listed above.\n"
+    
+    return context[:10000], gap_status
+
 knowledge_base = load_knowledge_base()
 
-# SECURITY: Add admin check function
 def is_admin_user():
-    """Check if current user is authenticated as admin"""
     return session.get("is_admin", False)
 
-# UPDATED: Extract text from PDF using PyMuPDF
 def extract_text_from_pdf(file_path):
     """Extract text from PDF using PyMuPDF"""
     try:
@@ -91,8 +242,8 @@ def extract_text_from_pdf(file_path):
         print(error_msg)
         return error_msg
 
-def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to permanent knowledge base (admin only)"""
+def add_personal_document_to_session(file_path, filename, session_id):
+    """Add document to USER's personal session"""
     try:
         text_content = extract_text_from_pdf(file_path)
         
@@ -101,40 +252,35 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
             "content": text_content,
             "added_date": datetime.now().isoformat(),
             "file_hash": hashlib.md5(open(file_path, 'rb').read()).hexdigest(),
-            "is_core": is_core,
-            "character_count": len(text_content)
+            "character_count": len(text_content),
+            "type": "user_personal_document",
+            "session_id": session_id
         }
         
-        if is_core:
-            # Add to permanent knowledge base
-            knowledge_base["documents"].append(doc_info)
-            knowledge_base["total_documents"] = len(knowledge_base["documents"])
-            save_knowledge_base(knowledge_base)
-            print(f"Added {filename} to core knowledge base ({len(text_content)} characters)")
+        user_session = get_user_session(session_id)
+        user_session["personal_documents"].append(doc_info)
+        print(f"Added {filename} to user session {session_id} ({len(text_content)} characters)")
         
         return doc_info
     except Exception as e:
-        print(f"Error adding document: {e}")
+        print(f"Error adding personal document: {e}")
         return None
 
 def get_session_id():
-    """Get or create session ID for user"""
     if 'session_id' not in session:
         session['session_id'] = hashlib.md5(str(datetime.now()).encode()).hexdigest()[:16]
     return session['session_id']
 
-# UPDATED: User session without temp documents (removed user uploads)
 def get_user_session(session_id):
-    """Get user session data - no temp documents anymore"""
     if session_id not in user_sessions:
         user_sessions[session_id] = {
             "chat_history": [],
+            "personal_documents": [],
             "created": datetime.now().isoformat()
-            # Removed temp_documents - no user uploads
         }
     return user_sessions[session_id]
 
-# Direct Claude API call
+# Direct API calls (unchanged)
 def call_claude_direct(system_prompt, user_message):
     try:
         print("Calling Claude API directly")
@@ -171,7 +317,6 @@ def call_claude_direct(system_prompt, user_message):
         print(f"Error in direct Claude call: {e}")
         return f"Error: {str(e)}"
 
-# Direct OpenAI API call
 def call_openai_direct(system_prompt, user_message):
     try:
         print("Calling OpenAI API directly")
@@ -207,32 +352,17 @@ def call_openai_direct(system_prompt, user_message):
         print(f"Error in direct OpenAI call: {e}")
         return f"Error: {str(e)}"
 
-# UPDATED: Build context from core knowledge only - no user documents
-def build_context_from_knowledge_base(session_id):
-    """Build context from core knowledge only - no user documents"""
-    context = ""
-    
-    # Only use core knowledge base (admin uploads)
-    if knowledge_base["documents"]:
-        context += "\n=== THERAPEUTIC KNOWLEDGE BASE ===\n"
-        for doc in knowledge_base["documents"][-5:]:  # Last 5 core documents
-            context += f"From {doc['filename']}:\n{doc['content'][:2000]}...\n\n"
-    
-    return context[:6000]  # Generous limit for therapeutic context
-
-# Intelligent model switching with knowledge base
-def get_model(user_input):
-    for keyword in config.get("keywords_for_openai", []):
-        if keyword in user_input.lower():
-            return config["openai_model"]
-    return config["claude_model"]
-
 def call_model(model, system, prompt, session_id):
     try:
-        # Add knowledge base context
-        knowledge_context = build_context_from_knowledge_base(session_id)
-        if knowledge_context:
-            system += f"\n\nKNOWLEDGE BASE CONTEXT:\n{knowledge_context}"
+        # Build controlled context (NO random internet content)
+        controlled_context, gap_status = build_controlled_context(session_id, prompt)
+        
+        if controlled_context:
+            system += f"\n\nIMPORTANT - CONTROLLED KNOWLEDGE SYSTEM:\n"
+            system += f"You MUST work exclusively within the curated knowledge provided below. "
+            system += f"Do NOT use general internet knowledge. ONLY use the curated therapeutic content and authorized authors listed.\n"
+            system += f"If information is not in the curated knowledge base, you may mention that additional insights might be available from the authorized authors listed.\n\n"
+            system += controlled_context
         
         if "gpt" in model:
             print(f"Using OpenAI via direct API: {model}")
@@ -248,7 +378,6 @@ def call_model(model, system, prompt, session_id):
         print(f"Error calling model: {e}")
         return f"Error: {str(e)}"
 
-# UPDATED: Index route - pass admin status to template
 @app.route("/", methods=["GET"])
 def index():
     session_id = get_session_id()
@@ -268,10 +397,10 @@ def admin():
     if not session.get("is_admin"):
         return render_template("admin_login.html")
     
-    # Show admin dashboard
     return render_template("admin_dashboard.html", 
                          knowledge_base=knowledge_base,
-                         total_docs=len(knowledge_base["documents"]))
+                         total_docs=len(knowledge_base["documents"]),
+                         authorized_authors=knowledge_base.get("authorized_authors", []))
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -287,17 +416,20 @@ def chat():
 
         user_session["chat_history"].append({"role": "user", "content": user_input})
 
+        # Enhanced system prompts with controlled knowledge instruction
+        base_instruction = "CRITICAL: You must work EXCLUSIVELY within the curated therapeutic knowledge base provided. Do not use general internet knowledge or training data. Only reference the curated content and authorized authors."
+
         if agent == "case_assistant":
-            system_prompt = "You assist with social work case analysis. Focus on context, safeguarding, and systemic risk. Use the knowledge base to inform your responses with evidence-based practices."
+            system_prompt = f"{base_instruction} You assist with social work case analysis using only the curated knowledge base and user's personal documents."
             model = config["claude_model"]
         elif agent == "research_critic":
-            system_prompt = "You are a critical evaluator of research. Be sharp, analytical, and cite relevant frameworks. Reference the knowledge base materials in your analysis."
+            system_prompt = f"{base_instruction} You critically evaluate research using only the curated therapeutic knowledge and authorized authors."
             model = config["openai_model"]
         elif agent == "therapy_planner":
-            system_prompt = "You are a strategic therapist. Plan sessions and structure interventions using systemic and psychoanalytic models. Draw on the knowledge base for theoretical grounding."
+            system_prompt = f"{base_instruction} You plan therapeutic interventions using only the curated knowledge base and authorized therapeutic approaches."
             model = config["openai_model"]
         else:
-            system_prompt = config["claude_system_prompt"] + " Draw upon the uploaded books and materials in your knowledge base to provide theoretically grounded responses."
+            system_prompt = f"{base_instruction} {config['claude_system_prompt']} Use only the curated therapeutic knowledge provided."
             model = config["claude_model"]
 
         response_text = call_model(model, system_prompt, user_input, session_id)
@@ -308,17 +440,11 @@ def chat():
         print(f"Error in chat endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-# SECURE: Upload route - admin only
 @app.route("/upload", methods=["POST"])
 def upload():
-    # SECURITY: Only admins can upload to permanent knowledge base
-    if not is_admin_user():
-        return jsonify({
-            "message": "Access denied. Only administrators can upload documents.", 
-            "success": False
-        }), 403
-    
     try:
+        session_id = get_session_id()
+        
         if "pdf" not in request.files:
             return jsonify({"message": "No file selected", "success": False})
         
@@ -329,33 +455,74 @@ def upload():
         if not file.filename.lower().endswith(".pdf"):
             return jsonify({"message": "Please select a PDF file", "success": False})
         
-        # Admin upload - goes to core knowledge base only
-        file_path = os.path.join(UPLOADS_DIR, file.filename)
-        file.save(file_path)
-        doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
+        upload_type = request.form.get("upload_type", "personal")
         
-        if doc_info:
-            return jsonify({
-                "message": f"Added '{file.filename}' to core knowledge base ({doc_info['character_count']} characters)", 
-                "success": True
-            })
-        else:
-            return jsonify({"message": "Failed to process PDF", "success": False})
+        if upload_type == "admin":
+            if not is_admin_user():
+                return jsonify({
+                    "message": "Access denied. Only administrators can upload to the global knowledge base.", 
+                    "success": False
+                }), 403
             
+            file_path = os.path.join(UPLOADS_DIR, file.filename)
+            file.save(file_path)
+            doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
+            
+            if doc_info:
+                authors_text = f" | Authors detected: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
+                return jsonify({
+                    "message": f"Added '{file.filename}' to controlled knowledge base ({doc_info['character_count']} characters){authors_text}", 
+                    "success": True,
+                    "type": "admin",
+                    "extracted_authors": doc_info['extracted_authors']
+                })
+        else:
+            file_path = os.path.join(USER_UPLOADS_DIR, f"{session_id}_{file.filename}")
+            file.save(file_path)
+            doc_info = add_personal_document_to_session(file_path, file.filename, session_id)
+            
+            if doc_info:
+                return jsonify({
+                    "message": f"Added '{file.filename}' to your personal session ({doc_info['character_count']} characters)", 
+                    "success": True,
+                    "type": "personal"
+                })
+        
+        return jsonify({"message": "Upload processing failed", "success": False})
+        
     except Exception as e:
-        print(f"Error in admin upload: {e}")
+        print(f"Error in upload endpoint: {e}")
         return jsonify({"error": str(e), "success": False})
 
-# UPDATED: Clear route - no temp documents to clear
+@app.route("/authorized-authors", methods=["GET"])
+def get_authorized_authors():
+    """Get list of authorized authors"""
+    return jsonify({
+        "authorized_authors": knowledge_base.get("authorized_authors", []),
+        "total_authors": len(knowledge_base.get("authorized_authors", []))
+    })
+
 @app.route("/clear", methods=["POST"])
 def clear():
     try:
         session_id = get_session_id()
         user_session = get_user_session(session_id)
         user_session["chat_history"] = []
-        return jsonify({"message": "Chat history cleared"})
+        return jsonify({"message": "Chat history cleared (personal documents retained)"})
     except Exception as e:
         print(f"Error in clear endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/clear-documents", methods=["POST"])
+def clear_documents():
+    try:
+        session_id = get_session_id()
+        user_session = get_user_session(session_id)
+        cleared_count = len(user_session["personal_documents"])
+        user_session["personal_documents"] = []
+        return jsonify({"message": f"Cleared {cleared_count} personal documents"})
+    except Exception as e:
+        print(f"Error in clear documents endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/log", methods=["GET"])
@@ -364,75 +531,37 @@ def get_log():
     user_session = get_user_session(session_id)
     return jsonify(user_session["chat_history"])
 
-@app.route("/knowledge-base", methods=["GET"])
-def get_knowledge_base():
-    """API endpoint to view knowledge base status"""
+@app.route("/personal-documents", methods=["GET"])
+def get_personal_documents():
+    session_id = get_session_id()
+    user_session = get_user_session(session_id)
     return jsonify({
-        "total_documents": len(knowledge_base["documents"]),
-        "last_updated": knowledge_base.get("last_updated"),
-        "documents": [{"filename": doc["filename"], "added_date": doc["added_date"], "character_count": doc.get("character_count", 0)} 
-                     for doc in knowledge_base["documents"]]
-    })
-
-# ADMIN: Knowledge base management
-@app.route("/admin/knowledge-base", methods=["GET"])
-def admin_knowledge_base():
-    if not is_admin_user():
-        return jsonify({"error": "Access denied"}), 403
-    
-    return jsonify({
-        "total_documents": len(knowledge_base["documents"]),
-        "last_updated": knowledge_base.get("last_updated"),
-        "documents": [
+        "personal_documents": [
             {
-                "filename": doc["filename"], 
-                "added_date": doc["added_date"], 
-                "character_count": doc.get("character_count", 0),
-                "file_hash": doc["file_hash"][:8]  # Short hash for identification
-            } 
-            for doc in knowledge_base["documents"]
+                "filename": doc["filename"],
+                "added_date": doc["added_date"],
+                "character_count": doc["character_count"]
+            }
+            for doc in user_session["personal_documents"]
         ]
     })
 
-# ADMIN: Delete document from knowledge base
-@app.route("/admin/knowledge-base/delete/<file_hash>", methods=["DELETE"])
-def delete_document(file_hash):
-    if not is_admin_user():
-        return jsonify({"error": "Access denied"}), 403
-    
-    try:
-        # Find and remove document by hash
-        for i, doc in enumerate(knowledge_base["documents"]):
-            if doc["file_hash"].startswith(file_hash):
-                removed_doc = knowledge_base["documents"].pop(i)
-                knowledge_base["total_documents"] = len(knowledge_base["documents"])
-                save_knowledge_base(knowledge_base)
-                return jsonify({
-                    "message": f"Removed '{removed_doc['filename']}' from knowledge base",
-                    "success": True
-                })
-        
-        return jsonify({"message": "Document not found", "success": False})
-        
-    except Exception as e:
-        return jsonify({"error": str(e), "success": False})
-
-# ADMIN: Dashboard route
-@app.route("/admin/dashboard")
-def admin_dashboard():
-    if not is_admin_user():
-        return redirect("/admin")
-    
-    return render_template("admin_dashboard.html", 
-                         knowledge_base=knowledge_base,
-                         total_docs=len(knowledge_base["documents"]))
+@app.route("/knowledge-base", methods=["GET"])
+def get_knowledge_base():
+    return jsonify({
+        "total_documents": len(knowledge_base["documents"]),
+        "last_updated": knowledge_base.get("last_updated"),
+        "authorized_authors": knowledge_base.get("authorized_authors", []),
+        "total_authors": len(knowledge_base.get("authorized_authors", [])),
+        "documents": [{"filename": doc["filename"], "added_date": doc["added_date"], "character_count": doc.get("character_count", 0)} 
+                     for doc in knowledge_base["documents"]]
+    })
 
 @app.route("/health")
 def health():
     openai_works = False
     claude_works = False
     
-    # Test OpenAI direct API
     if openai_api_key:
         try:
             test_response = call_openai_direct("You are a test assistant.", "Hello")
@@ -440,7 +569,6 @@ def health():
         except:
             openai_works = False
     
-    # Test Claude direct API
     if claude_api_key:
         try:
             test_response = call_claude_direct("You are a test assistant.", "Hello")
@@ -455,9 +583,10 @@ def health():
         "claude_configured": claude_api_key is not None,
         "claude_client_works": claude_works,
         "knowledge_base_documents": len(knowledge_base["documents"]),
+        "authorized_authors": len(knowledge_base.get("authorized_authors", [])),
+        "controlled_knowledge_system": True,
         "pdf_support": True,
-        "admin_only_uploads": True,  # Security feature enabled
-        "note": "Secure system: Only administrators can upload to knowledge base"
+        "note": "Controlled knowledge system: Only curated content + authorized authors"
     })
 
 if __name__ == "__main__":
