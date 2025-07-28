@@ -5,66 +5,315 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Therapeutic AI Co-Therapist</title>
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
-      background-color: #121212;
+      font-family: Georgia, serif;
+      height: 100vh;
+      overflow: hidden;
+      background: #1a1a1a;
       color: #ffffff;
-      font-family: Arial, sans-serif;
+    }
+
+    .header {
+      background: #2d2d2d;
+      padding: 15px 20px;
+      border-bottom: 2px solid #444;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: normal;
+      color: #ffffff;
+    }
+
+    .chat-container {
+      display: flex;
+      height: calc(100vh - 180px);
+      border: 2px solid #444;
+      margin: 10px;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .user-side {
+      flex: 1;
+      background: linear-gradient(135deg, #2c3e50, #34495e);
       padding: 20px;
+      overflow-y: auto;
+      border-right: 3px solid #555;
     }
-    input, select, button, textarea {
-      font-size: 1em;
-      margin: 5px 0;
+
+    .assistant-side {
+      flex: 1;
+      background: linear-gradient(135deg, #27ae60, #2ecc71);
+      padding: 20px;
+      overflow-y: auto;
     }
-    textarea {
-      width: 100%;
-      height: 100px;
+
+    .side-header {
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.2);
     }
-    select, button {
-      padding: 5px;
+
+    .user-side .side-header {
+      background: rgba(52, 73, 94, 0.8);
+      color: #ecf0f1;
     }
+
+    .assistant-side .side-header {
+      background: rgba(39, 174, 96, 0.8);
+      color: #ffffff;
+    }
+
+    .message {
+      margin: 15px 0;
+      padding: 15px;
+      border-radius: 12px;
+      line-height: 1.6;
+      font-size: 16px;
+      word-wrap: break-word;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .user-message {
+      background: rgba(236, 240, 241, 0.95);
+      color: #2c3e50;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      border-left: 4px solid #3498db;
+    }
+
+    .assistant-message {
+      background: rgba(255, 255, 255, 0.95);
+      color: #27ae60;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      border-left: 4px solid #f39c12;
+    }
+
     .controls {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #2d2d2d;
+      padding: 20px;
+      border-top: 2px solid #444;
+    }
+
+    .input-container {
+      display: flex;
+      gap: 10px;
+      max-width: 1200px;
+      margin: 0 auto;
+      align-items: flex-end;
+    }
+
+    #user-input {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #555;
+      border-radius: 8px;
+      background: #1a1a1a;
+      color: #ffffff;
+      font-family: Georgia, serif;
+      font-size: 16px;
+      resize: vertical;
+      min-height: 50px;
+      max-height: 150px;
+    }
+
+    #user-input:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+    }
+
+    .control-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    select, button {
+      padding: 12px 16px;
+      border: 2px solid #555;
+      border-radius: 8px;
+      background: #34495e;
+      color: #ffffff;
+      font-family: Georgia, serif;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    button:hover, select:hover {
+      background: #3498db;
+      border-color: #3498db;
+      transform: translateY(-1px);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    .upload-section {
       margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #pdf-upload {
+      color: #ffffff;
+      font-family: Georgia, serif;
+    }
+
+    .voice-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .voice-controls label {
+      color: #ffffff;
+      font-family: Georgia, serif;
+    }
+
+    /* Scrollbar styling */
+    .user-side::-webkit-scrollbar,
+    .assistant-side::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .user-side::-webkit-scrollbar-track {
+      background: rgba(52, 73, 94, 0.3);
+    }
+
+    .assistant-side::-webkit-scrollbar-track {
+      background: rgba(39, 174, 96, 0.3);
+    }
+
+    .user-side::-webkit-scrollbar-thumb {
+      background: rgba(236, 240, 241, 0.5);
+      border-radius: 4px;
+    }
+
+    .assistant-side::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 4px;
+    }
+
+    /* Loading indicator */
+    .loading {
+      display: none;
+      padding: 15px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #27ae60;
+      border-radius: 12px;
+      font-style: italic;
+      border-left: 4px solid #f39c12;
+    }
+
+    .typing-dots {
+      display: inline-block;
+    }
+
+    .typing-dots::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
     }
   </style>
 </head>
 <body>
-  <h1>Therapeutic AI Co-Therapist</h1>
+  <div class="header">
+    <h1>Therapeutic AI Co-Therapist</h1>
+  </div>
 
-  <div id="chat-box"></div>
+  <div class="chat-container">
+    <div class="user-side">
+      <div class="side-header">Your Messages</div>
+      <div id="user-messages"></div>
+    </div>
 
-  <form id="chat-form">
-    <textarea id="user-input" placeholder="Enter your message..."></textarea><br>
+    <div class="assistant-side">
+      <div class="side-header">AI Therapist Responses</div>
+      <div id="assistant-messages">
+        <div class="loading" id="loading-indicator">
+          <span class="typing-dots">AI is thinking</span>
+        </div>
+      </div>
+    </div>
+  </div>
 
-    <input type="file" id="pdf-upload" name="pdf" accept="application/pdf">
-    <button type="button" id="upload-btn">Upload PDF</button><br>
-
-    <select id="agent-select">
-      <option value="therapist">🧠 Therapist (Claude)</option>
-      <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
-      <option value="research_critic">🧐 Research Critic (GPT)</option>
-      <option value="therapy_planner">📋 Therapy Planner (Hybrid)</option>
-    </select><br>
-
-    <div class="controls">
-      <button type="submit">Send</button>
-      <button type="button" id="clear-btn">Clear Memory</button>
+  <div class="controls">
+    <div class="input-container">
+      <textarea id="user-input" placeholder="Type your message here..." rows="2"></textarea>
+      <div class="control-buttons">
+        <select id="agent-select">
+          <option value="therapist">🧠 Therapist (Claude)</option>
+          <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
+          <option value="research_critic">🧐 Research Critic (GPT)</option>
+          <option value="therapy_planner">📋 Therapy Planner (GPT)</option>
+        </select>
+        <button type="button" id="send-btn">Send</button>
+        <button type="button" id="clear-btn">Clear</button>
+      </div>
+    </div>
+    
+    <div class="upload-section">
+      <input type="file" id="pdf-upload" name="pdf" accept="application/pdf">
+      <button type="button" id="upload-btn">Upload PDF</button>
       <button type="button" id="download-btn">Download Chat</button>
       <button type="button" id="feedback-btn">Send Feedback</button>
     </div>
 
-    <label><input type="checkbox" id="voice-toggle"> 🔊 Voice Output</label>
-    <select id="voice-select"></select>
-  </form>
+    <div class="voice-controls">
+      <label>
+        <input type="checkbox" id="voice-toggle"> 🔊 Voice Output
+      </label>
+      <select id="voice-select"></select>
+    </div>
+  </div>
 
   <script>
-    const chatBox = document.getElementById('chat-box');
-    const chatForm = document.getElementById('chat-form');
+    const userMessages = document.getElementById('user-messages');
+    const assistantMessages = document.getElementById('assistant-messages');
     const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
     const agentSelect = document.getElementById('agent-select');
     const uploadBtn = document.getElementById('upload-btn');
     const pdfUpload = document.getElementById('pdf-upload');
     const voiceToggle = document.getElementById('voice-toggle');
     const voiceSelect = document.getElementById('voice-select');
+    const loadingIndicator = document.getElementById('loading-indicator');
 
     // Voice options
     let voices = [];
@@ -75,6 +324,86 @@
     window.speechSynthesis.onvoiceschanged = loadVoices;
     loadVoices();
 
+    // Auto-resize textarea
+    userInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+
+    // Send message on Enter (but allow Shift+Enter for new lines)
+    userInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    // Add message to appropriate side
+    function addMessage(content, isUser) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+      messageDiv.textContent = content;
+      
+      if (isUser) {
+        userMessages.appendChild(messageDiv);
+        userMessages.scrollTop = userMessages.scrollHeight;
+      } else {
+        assistantMessages.appendChild(messageDiv);
+        assistantMessages.scrollTop = assistantMessages.scrollHeight;
+      }
+    }
+
+    // Show/hide loading indicator
+    function showLoading(show) {
+      loadingIndicator.style.display = show ? 'block' : 'none';
+      if (show) {
+        assistantMessages.scrollTop = assistantMessages.scrollHeight;
+      }
+    }
+
+    // Send message
+    async function sendMessage() {
+      const input = userInput.value.trim();
+      if (!input) return;
+
+      // Add user message
+      addMessage(input, true);
+      
+      // Clear input and show loading
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      showLoading(true);
+
+      try {
+        const agent = agentSelect.value;
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_input: input, agent })
+        });
+        
+        const data = await response.json();
+        
+        // Hide loading and add response
+        showLoading(false);
+        addMessage(data.response || data.error || "No response received", false);
+
+        // Voice output
+        if (voiceToggle.checked && data.response) {
+          const utter = new SpeechSynthesisUtterance(data.response);
+          const selectedVoice = voices.find(v => v.name === voiceSelect.value);
+          if (selectedVoice) utter.voice = selectedVoice;
+          window.speechSynthesis.speak(utter);
+        }
+      } catch (error) {
+        showLoading(false);
+        addMessage(`Error: ${error.message}`, false);
+      }
+    }
+
+    // Event listeners
+    sendBtn.addEventListener('click', sendMessage);
+
     // Upload PDF
     uploadBtn.addEventListener("click", async () => {
       const file = pdfUpload.files[0];
@@ -83,59 +412,53 @@
       const formData = new FormData();
       formData.append("pdf", file);
 
-      const response = await fetch("/upload", {
-        method: "POST",
-        body: formData
-      });
-
-      if (response.redirected) window.location.href = response.url;
-    });
-
-    // Send chat
-    chatForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const input = userInput.value;
-      if (!input.trim()) return;
-
-      const agent = agentSelect.value;
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_input: input, agent })
-      });
-      const data = await res.json();
-
-      chatBox.innerHTML += `<p><strong>You:</strong> ${input}</p>`;
-      chatBox.innerHTML += `<p><strong>Bot:</strong> ${data.response}</p>`;
-      userInput.value = "";
-
-      // Voice output
-      if (voiceToggle.checked) {
-        const utter = new SpeechSynthesisUtterance(data.response);
-        const selectedVoice = voices.find(v => v.name === voiceSelect.value);
-        if (selectedVoice) utter.voice = selectedVoice;
-        window.speechSynthesis.speak(utter);
+      try {
+        const response = await fetch("/upload", {
+          method: "POST",
+          body: formData
+        });
+        
+        const result = await response.json();
+        alert(result.message || "Upload completed");
+      } catch (error) {
+        alert("Upload failed: " + error.message);
       }
     });
 
+    // Clear chat
     document.getElementById("clear-btn").addEventListener("click", async () => {
-      await fetch("/clear", { method: "POST" });
-      chatBox.innerHTML = "";
+      try {
+        await fetch("/clear", { method: "POST" });
+        userMessages.innerHTML = '';
+        assistantMessages.innerHTML = '<div class="loading" id="loading-indicator"><span class="typing-dots">AI is thinking</span></div>';
+        loadingIndicator = document.getElementById('loading-indicator');
+      } catch (error) {
+        alert("Clear failed: " + error.message);
+      }
     });
 
+    // Download chat
     document.getElementById("download-btn").addEventListener("click", async () => {
-      const res = await fetch("/log");
-      const log = await res.json();
-      const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "chat_history.json";
-      link.click();
+      try {
+        const res = await fetch("/log");
+        const log = await res.json();
+        const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "chat_history.json";
+        link.click();
+      } catch (error) {
+        alert("Download failed: " + error.message);
+      }
     });
 
+    // Feedback
     document.getElementById("feedback-btn").addEventListener("click", () => {
       alert("Thank you for your feedback!");
     });
+
+    // Initial focus
+    userInput.focus();
   </script>
 </body>
 </html>
