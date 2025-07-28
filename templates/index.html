@@ -34,7 +34,7 @@
 
     .chat-container {
       display: flex;
-      height: calc(100vh - 180px);
+      height: calc(100vh - 200px);
       border: 2px solid #444;
       margin: 10px;
       border-radius: 10px;
@@ -76,20 +76,24 @@
       color: #ffffff;
     }
 
+    /* IMPROVED MESSAGE BUBBLES */
     .message {
-      margin: 15px 0;
-      padding: 15px;
-      border-radius: 12px;
-      line-height: 1.6;
-      font-size: 16px;
+      margin: 10px 0;
+      padding: 12px 16px;
+      border-radius: 18px;
+      line-height: 1.5;
+      font-size: 15px;
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
+      max-width: 85%;
+      display: inline-block;
+      position: relative;
     }
 
     @keyframes slideIn {
       from {
         opacity: 0;
-        transform: translateY(20px);
+        transform: translateY(10px);
       }
       to {
         opacity: 1;
@@ -98,17 +102,37 @@
     }
 
     .user-message {
-      background: rgba(236, 240, 241, 0.95);
+      background: rgba(255, 255, 255, 0.95);
       color: #2c3e50;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      border-left: 4px solid #3498db;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      border-bottom-left-radius: 4px;
+      margin-left: 0;
+      margin-right: auto;
     }
 
     .assistant-message {
       background: rgba(255, 255, 255, 0.95);
       color: #27ae60;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      border-left: 4px solid #f39c12;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      border-bottom-right-radius: 4px;
+      margin-left: auto;
+      margin-right: 0;
+    }
+
+    /* Message timestamp */
+    .message-time {
+      font-size: 11px;
+      opacity: 0.7;
+      margin-top: 4px;
+      text-align: right;
+    }
+
+    .user-message .message-time {
+      color: #7f8c8d;
+    }
+
+    .assistant-message .message-time {
+      color: #229954;
     }
 
     .controls {
@@ -117,7 +141,7 @@
       left: 0;
       right: 0;
       background: #2d2d2d;
-      padding: 20px;
+      padding: 15px;
       border-top: 2px solid #444;
     }
 
@@ -131,22 +155,22 @@
 
     #user-input {
       flex: 1;
-      padding: 12px;
+      padding: 12px 16px;
       border: 2px solid #555;
-      border-radius: 8px;
+      border-radius: 25px;
       background: #1a1a1a;
       color: #ffffff;
       font-family: Georgia, serif;
-      font-size: 16px;
-      resize: vertical;
-      min-height: 50px;
-      max-height: 150px;
+      font-size: 15px;
+      resize: none;
+      min-height: 45px;
+      max-height: 120px;
+      outline: none;
     }
 
     #user-input:focus {
-      outline: none;
       border-color: #3498db;
-      box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+      box-shadow: 0 0 8px rgba(52, 152, 219, 0.3);
     }
 
     .control-buttons {
@@ -181,58 +205,50 @@
       display: flex;
       gap: 10px;
       align-items: center;
+      max-width: 1200px;
+      margin-left: auto;
+      margin-right: auto;
     }
 
     #pdf-upload {
       color: #ffffff;
       font-family: Georgia, serif;
+      padding: 8px 12px;
+      border: 2px solid #555;
+      border-radius: 6px;
+      background: #1a1a1a;
     }
 
-    .voice-controls {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-top: 10px;
+    /* Upload status messages */
+    .upload-status {
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-left: 10px;
     }
 
-    .voice-controls label {
-      color: #ffffff;
-      font-family: Georgia, serif;
+    .upload-success {
+      background: #27ae60;
+      color: white;
     }
 
-    /* Scrollbar styling */
-    .user-side::-webkit-scrollbar,
-    .assistant-side::-webkit-scrollbar {
-      width: 8px;
+    .upload-error {
+      background: #e74c3c;
+      color: white;
     }
 
-    .user-side::-webkit-scrollbar-track {
-      background: rgba(52, 73, 94, 0.3);
-    }
-
-    .assistant-side::-webkit-scrollbar-track {
-      background: rgba(39, 174, 96, 0.3);
-    }
-
-    .user-side::-webkit-scrollbar-thumb {
-      background: rgba(236, 240, 241, 0.5);
-      border-radius: 4px;
-    }
-
-    .assistant-side::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.5);
-      border-radius: 4px;
-    }
-
-    /* Loading indicator */
+    /* Loading indicator improvements */
     .loading {
       display: none;
-      padding: 15px;
+      padding: 12px 16px;
       background: rgba(255, 255, 255, 0.9);
       color: #27ae60;
-      border-radius: 12px;
+      border-radius: 18px;
       font-style: italic;
-      border-left: 4px solid #f39c12;
+      max-width: 85%;
+      margin-left: auto;
+      margin-right: 0;
+      border-bottom-right-radius: 4px;
     }
 
     .typing-dots {
@@ -250,11 +266,73 @@
       60% { content: '..'; }
       80%, 100% { content: '...'; }
     }
+
+    /* Scrollbar styling */
+    .user-side::-webkit-scrollbar,
+    .assistant-side::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .user-side::-webkit-scrollbar-track {
+      background: rgba(52, 73, 94, 0.3);
+    }
+
+    .assistant-side::-webkit-scrollbar-track {
+      background: rgba(39, 174, 96, 0.3);
+    }
+
+    .user-side::-webkit-scrollbar-thumb {
+      background: rgba(236, 240, 241, 0.5);
+      border-radius: 3px;
+    }
+
+    .assistant-side::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 3px;
+    }
+
+    /* Admin panel button */
+    .admin-link {
+      position: absolute;
+      top: 15px;
+      right: 20px;
+      color: #3498db;
+      text-decoration: none;
+      font-size: 14px;
+      opacity: 0.7;
+      transition: opacity 0.3s;
+    }
+
+    .admin-link:hover {
+      opacity: 1;
+    }
+
+    /* Voice controls styling */
+    .voice-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    .voice-controls label {
+      color: #ffffff;
+      font-family: Georgia, serif;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .voice-controls input[type="checkbox"] {
+      margin: 0;
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <h1>Therapeutic AI Co-Therapist</h1>
+    <a href="/admin" class="admin-link">Admin Panel</a>
   </div>
 
   <div class="chat-container">
@@ -275,7 +353,7 @@
 
   <div class="controls">
     <div class="input-container">
-      <textarea id="user-input" placeholder="Type your message here..." rows="2"></textarea>
+      <textarea id="user-input" placeholder="Type your message here..." rows="1"></textarea>
       <div class="control-buttons">
         <select id="agent-select">
           <option value="therapist">🧠 Therapist (Claude)</option>
@@ -292,7 +370,7 @@
       <input type="file" id="pdf-upload" name="pdf" accept="application/pdf">
       <button type="button" id="upload-btn">Upload PDF</button>
       <button type="button" id="download-btn">Download Chat</button>
-      <button type="button" id="feedback-btn">Send Feedback</button>
+      <span id="upload-status" class="upload-status" style="display: none;"></span>
     </div>
 
     <div class="voice-controls">
@@ -314,6 +392,7 @@
     const voiceToggle = document.getElementById('voice-toggle');
     const voiceSelect = document.getElementById('voice-select');
     const loadingIndicator = document.getElementById('loading-indicator');
+    const uploadStatus = document.getElementById('upload-status');
 
     // Voice options
     let voices = [];
@@ -327,7 +406,7 @@
     // Auto-resize textarea
     userInput.addEventListener('input', function() {
       this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
     // Send message on Enter (but allow Shift+Enter for new lines)
@@ -338,11 +417,17 @@
       }
     });
 
-    // Add message to appropriate side
+    // Add message to appropriate side with improved styling
     function addMessage(content, isUser) {
       const messageDiv = document.createElement('div');
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      
       messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-      messageDiv.textContent = content;
+      messageDiv.innerHTML = `
+        <div>${content}</div>
+        <div class="message-time">${timeStr}</div>
+      `;
       
       if (isUser) {
         userMessages.appendChild(messageDiv);
@@ -359,6 +444,17 @@
       if (show) {
         assistantMessages.scrollTop = assistantMessages.scrollHeight;
       }
+    }
+
+    // Show upload status
+    function showUploadStatus(message, isSuccess) {
+      uploadStatus.textContent = message;
+      uploadStatus.className = `upload-status ${isSuccess ? 'upload-success' : 'upload-error'}`;
+      uploadStatus.style.display = 'inline-block';
+      
+      setTimeout(() => {
+        uploadStatus.style.display = 'none';
+      }, 5000);
     }
 
     // Send message
@@ -404,24 +500,40 @@
     // Event listeners
     sendBtn.addEventListener('click', sendMessage);
 
-    // Upload PDF
+    // Upload PDF with better error handling
     uploadBtn.addEventListener("click", async () => {
       const file = pdfUpload.files[0];
-      if (!file) return alert("Please choose a PDF file.");
+      if (!file) {
+        showUploadStatus("Please choose a PDF file first", false);
+        return;
+      }
+
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showUploadStatus("Please select a valid PDF file", false);
+        return;
+      }
 
       const formData = new FormData();
       formData.append("pdf", file);
 
       try {
+        showUploadStatus("Uploading...", true);
+        
         const response = await fetch("/upload", {
           method: "POST",
           body: formData
         });
         
         const result = await response.json();
-        alert(result.message || "Upload completed");
+        
+        if (result.success) {
+          showUploadStatus(result.message || "Upload successful!", true);
+          pdfUpload.value = ''; // Clear file input
+        } else {
+          showUploadStatus(result.message || "Upload failed", false);
+        }
       } catch (error) {
-        alert("Upload failed: " + error.message);
+        showUploadStatus("Upload failed: " + error.message, false);
       }
     });
 
@@ -432,8 +544,9 @@
         userMessages.innerHTML = '';
         assistantMessages.innerHTML = '<div class="loading" id="loading-indicator"><span class="typing-dots">AI is thinking</span></div>';
         loadingIndicator = document.getElementById('loading-indicator');
+        showUploadStatus("Chat cleared", true);
       } catch (error) {
-        alert("Clear failed: " + error.message);
+        showUploadStatus("Clear failed: " + error.message, false);
       }
     });
 
@@ -447,14 +560,10 @@
         link.href = URL.createObjectURL(blob);
         link.download = "chat_history.json";
         link.click();
+        showUploadStatus("Chat downloaded", true);
       } catch (error) {
-        alert("Download failed: " + error.message);
+        showUploadStatus("Download failed: " + error.message, false);
       }
-    });
-
-    // Feedback
-    document.getElementById("feedback-btn").addEventListener("click", () => {
-      alert("Thank you for your feedback!");
     });
 
     // Initial focus
@@ -462,5 +571,4 @@
   </script>
 </body>
 </html>
-
 
