@@ -116,7 +116,6 @@
       color: #ffffff;
     }
 
-    /* Message bubbles */
     .message {
       margin: 10px 0;
       padding: 12px 16px;
@@ -130,410 +129,7 @@
       position: relative;
     }
 
-    @keyframes dots {
-      0%, 20% { content: ''; }
-      40% { content: '.'; }
-      60% { content: '..'; }
-      80%, 100% { content: '...'; }
-    }
-
-    /* Scrollbar styling */
-    .user-side::-webkit-scrollbar,
-    .assistant-side::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    .user-side::-webkit-scrollbar-track {
-      background: rgba(52, 73, 94, 0.3);
-    }
-
-    .assistant-side::-webkit-scrollbar-track {
-      background: rgba(39, 174, 96, 0.3);
-    }
-
-    .user-side::-webkit-scrollbar-thumb {
-      background: rgba(236, 240, 241, 0.5);
-      border-radius: 3px;
-    }
-
-    .assistant-side::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.5);
-      border-radius: 3px;
-    }
-
-    /* Status messages */
-    .status-message {
-      padding: 6px 10px;
-      border-radius: 4px;
-      font-size: 12px;
-      margin-left: 8px;
-    }
-
-    .status-success {
-      background: #27ae60;
-      color: white;
-    }
-
-    .status-error {
-      background: #e74c3c;
-      color: white;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="knowledge-status" id="knowledge-status">
-      🧠 Professional Knowledge Base Active
-    </div>
-    <div class="personal-docs-status" id="personal-docs-status">
-      📁 0 Personal Documents
-    </div>
-    <h1>Therapeutic AI Co-Therapist</h1>
-    <a href="/admin" class="admin-link">Admin Panel</a>
-  </div>
-
-  <div class="chat-container">
-    <div class="user-side">
-      <div class="side-header">Your Messages</div>
-      <div id="user-messages"></div>
-    </div>
-
-    <div class="assistant-side">
-      <div class="side-header">AI Therapist Responses</div>
-      <div id="assistant-messages">
-        <div class="loading" id="loading-indicator">
-          <span class="typing-dots">AI is thinking</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="controls">
-    <div class="input-container">
-      <textarea id="user-input" placeholder="Share what's on your mind..." rows="1"></textarea>
-      <div class="control-buttons">
-        <select id="agent-select">
-          <option value="therapist">🧠 Therapist (Claude)</option>
-          <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
-          <option value="research_critic">🧐 Research Critic (GPT)</option>
-          <option value="therapy_planner">📋 Therapy Planner (GPT)</option>
-        </select>
-        <button type="button" id="send-btn">Send</button>
-        <button type="button" id="clear-btn">Clear Chat</button>
-      </div>
-    </div>
-    
-    <div class="upload-sections">
-      <!-- ADMIN UPLOAD - Global Knowledge Base -->
-      <div class="admin-upload-section" id="admin-upload-section">
-        <div class="upload-label">🔒 Admin: Global Knowledge Base</div>
-        <input type="file" class="pdf-upload" id="admin-pdf-upload" accept="application/pdf">
-        <button type="button" class="upload-btn" id="admin-upload-btn">Upload</button>
-        <span id="admin-upload-status" class="status-message" style="display: none;"></span>
-      </div>
-      
-      <!-- USER UPLOAD - Personal Documents -->
-      <div class="user-upload-section">
-        <div class="upload-label">📁 Your Personal Documents</div>
-        <input type="file" class="pdf-upload" id="user-pdf-upload" accept="application/pdf">
-        <button type="button" class="upload-btn" id="user-upload-btn">Upload</button>
-        <button type="button" class="upload-btn" id="clear-docs-btn">Clear Docs</button>
-        <span id="user-upload-status" class="status-message" style="display: none;"></span>
-      </div>
-      
-      <!-- GENERAL CONTROLS -->
-      <div class="general-controls">
-        <button type="button" id="download-btn">Download Session</button>
-        <span style="color: #27ae60; font-size: 13px;">
-          💡 Upload therapy notes, session summaries, or personal context - they stay private to your session
-        </span>
-        <span id="general-status" class="status-message" style="display: none;"></span>
-      </div>
-    </div>
-
-    <div class="voice-controls">
-      <label>
-        <input type="checkbox" id="voice-toggle"> 🔊 Voice Output
-      </label>
-      <select id="voice-select"></select>
-    </div>
-  </div>
-
-  <script>
-    const userMessages = document.getElementById('user-messages');
-    const assistantMessages = document.getElementById('assistant-messages');
-    const userInput = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send-btn');
-    const agentSelect = document.getElementById('agent-select');
-    const voiceToggle = document.getElementById('voice-toggle');
-    const voiceSelect = document.getElementById('voice-select');
-    const loadingIndicator = document.getElementById('loading-indicator');
-    const knowledgeStatus = document.getElementById('knowledge-status');
-    const personalDocsStatus = document.getElementById('personal-docs-status');
-    const adminUploadSection = document.getElementById('admin-upload-section');
-
-    // Admin elements
-    const adminPdfUpload = document.getElementById('admin-pdf-upload');
-    const adminUploadBtn = document.getElementById('admin-upload-btn');
-    const adminUploadStatus = document.getElementById('admin-upload-status');
-
-    // User elements
-    const userPdfUpload = document.getElementById('user-pdf-upload');
-    const userUploadBtn = document.getElementById('user-upload-btn');
-    const userUploadStatus = document.getElementById('user-upload-status');
-    const clearDocsBtn = document.getElementById('clear-docs-btn');
-    const generalStatus = document.getElementById('general-status');
-
-    // Check if user is admin and show admin upload section
-    let isAdmin = {{ 'true' if is_admin else 'false' }};
-    if (isAdmin) {
-      adminUploadSection.classList.add('visible');
-    }
-
-    // Voice options
-    let voices = [];
-    function loadVoices() {
-      voices = window.speechSynthesis.getVoices();
-      voiceSelect.innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join('');
-    }
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    loadVoices();
-
-    // Load statuses
-    async function loadKnowledgeStatus() {
-      try {
-        const response = await fetch('/knowledge-base');
-        const data = await response.json();
-        knowledgeStatus.textContent = `🧠 ${data.total_documents} Professional Resources`;
-      } catch (error) {
-        knowledgeStatus.textContent = '🧠 Professional Knowledge Loading...';
-      }
-    }
-
-    async function loadPersonalDocsStatus() {
-      try {
-        const response = await fetch('/personal-documents');
-        const data = await response.json();
-        const count = data.personal_documents.length;
-        personalDocsStatus.textContent = `📁 ${count} Personal Document${count !== 1 ? 's' : ''}`;
-      } catch (error) {
-        personalDocsStatus.textContent = '📁 Personal Docs Loading...';
-      }
-    }
-
-    // Auto-resize textarea
-    userInput.addEventListener('input', function() {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
-
-    // Send message on Enter (but allow Shift+Enter for new lines)
-    userInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    // Add message to appropriate side with improved styling
-    function addMessage(content, isUser) {
-      const messageDiv = document.createElement('div');
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      
-      messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-      messageDiv.innerHTML = `
-        <div>${content}</div>
-        <div class="message-time">${timeStr}</div>
-      `;
-      
-      if (isUser) {
-        userMessages.appendChild(messageDiv);
-        userMessages.scrollTop = userMessages.scrollHeight;
-      } else {
-        assistantMessages.appendChild(messageDiv);
-        assistantMessages.scrollTop = assistantMessages.scrollHeight;
-      }
-    }
-
-    // Show/hide loading indicator
-    function showLoading(show) {
-      loadingIndicator.style.display = show ? 'block' : 'none';
-      if (show) {
-        assistantMessages.scrollTop = assistantMessages.scrollHeight;
-      }
-    }
-
-    // Show status message
-    function showStatus(element, message, isSuccess) {
-      element.textContent = message;
-      element.className = `status-message ${isSuccess ? 'status-success' : 'status-error'}`;
-      element.style.display = 'inline-block';
-      
-      setTimeout(() => {
-        element.style.display = 'none';
-      }, 4000);
-    }
-
-    // Send message
-    async function sendMessage() {
-      const input = userInput.value.trim();
-      if (!input) return;
-
-      addMessage(input, true);
-      userInput.value = '';
-      userInput.style.height = 'auto';
-      showLoading(true);
-
-      try {
-        const agent = agentSelect.value;
-        const response = await fetch("/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_input: input, agent })
-        });
-        
-        const data = await response.json();
-        
-        showLoading(false);
-        addMessage(data.response || data.error || "No response received", false);
-
-        // Voice output
-        if (voiceToggle.checked && data.response) {
-          const utter = new SpeechSynthesisUtterance(data.response);
-          const selectedVoice = voices.find(v => v.name === voiceSelect.value);
-          if (selectedVoice) utter.voice = selectedVoice;
-          window.speechSynthesis.speak(utter);
-        }
-      } catch (error) {
-        showLoading(false);
-        addMessage(`Error: ${error.message}`, false);
-      }
-    }
-
-    // Admin upload
-    if (isAdmin && adminUploadBtn) {
-      adminUploadBtn.addEventListener("click", async () => {
-        const file = adminPdfUpload.files[0];
-        if (!file) {
-          showStatus(adminUploadStatus, "Please choose a PDF file first", false);
-          return;
-        }
-
-        const formData = new FormData();
-        formData.append("pdf", file);
-        formData.append("upload_type", "admin");
-
-        try {
-          showStatus(adminUploadStatus, "Uploading to global knowledge base...", true);
-          
-          const response = await fetch("/upload", {
-            method: "POST",
-            body: formData
-          });
-          
-          const result = await response.json();
-          
-          if (result.success) {
-            showStatus(adminUploadStatus, result.message, true);
-            adminPdfUpload.value = '';
-            loadKnowledgeStatus();
-          } else {
-            showStatus(adminUploadStatus, result.message, false);
-          }
-        } catch (error) {
-          showStatus(adminUploadStatus, "Upload failed: " + error.message, false);
-        }
-      });
-    }
-
-    // User upload
-    userUploadBtn.addEventListener("click", async () => {
-      const file = userPdfUpload.files[0];
-      if (!file) {
-        showStatus(userUploadStatus, "Please choose a PDF file first", false);
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("pdf", file);
-      formData.append("upload_type", "personal");
-
-      try {
-        showStatus(userUploadStatus, "Uploading to your session...", true);
-        
-        const response = await fetch("/upload", {
-          method: "POST",
-          body: formData
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-          showStatus(userUploadStatus, result.message, true);
-          userPdfUpload.value = '';
-          loadPersonalDocsStatus();
-        } else {
-          showStatus(userUploadStatus, result.message, false);
-        }
-      } catch (error) {
-        showStatus(userUploadStatus, "Upload failed: " + error.message, false);
-      }
-    });
-
-    // Clear personal documents
-    clearDocsBtn.addEventListener("click", async () => {
-      if (!confirm("Clear all your personal documents? This cannot be undone.")) return;
-      
-      try {
-        const response = await fetch("/clear-documents", { method: "POST" });
-        const result = await response.json();
-        showStatus(userUploadStatus, result.message, true);
-        loadPersonalDocsStatus();
-      } catch (error) {
-        showStatus(userUploadStatus, "Clear failed: " + error.message, false);
-      }
-    });
-
-    // Clear chat
-    document.getElementById("clear-btn").addEventListener("click", async () => {
-      try {
-        await fetch("/clear", { method: "POST" });
-        userMessages.innerHTML = '';
-        assistantMessages.innerHTML = '<div class="loading" id="loading-indicator"><span class="typing-dots">AI is thinking</span></div>';
-        loadingIndicator = document.getElementById('loading-indicator');
-        showStatus(generalStatus, "Chat cleared (documents retained)", true);
-      } catch (error) {
-        showStatus(generalStatus, "Clear failed: " + error.message, false);
-      }
-    });
-
-    // Download session
-    document.getElementById("download-btn").addEventListener("click", async () => {
-      try {
-        const res = await fetch("/log");
-        const log = await res.json();
-        const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = "therapeutic_session.json";
-        link.click();
-        showStatus(generalStatus, "Session downloaded", true);
-      } catch (error) {
-        showStatus(generalStatus, "Download failed: " + error.message, false);
-      }
-    });
-
-    // Event listeners
-    sendBtn.addEventListener('click', sendMessage);
-
-    // Load initial data
-    loadKnowledgeStatus();
-    loadPersonalDocsStatus();
-    userInput.focus();
-  </script>
-</body>
-</html>frames slideIn {
+    @keyframes slideIn {
       from {
         opacity: 0;
         transform: translateY(10px);
@@ -642,7 +238,6 @@
       transform: translateY(0);
     }
 
-    /* TWO-TIER UPLOAD SYSTEM */
     .upload-sections {
       margin-top: 10px;
       max-width: 1200px;
@@ -650,7 +245,6 @@
       margin-right: auto;
     }
 
-    /* Admin Upload Section */
     .admin-upload-section {
       display: none;
       gap: 10px;
@@ -666,7 +260,6 @@
       display: flex;
     }
 
-    /* User Upload Section */
     .user-upload-section {
       display: flex;
       gap: 10px;
@@ -708,7 +301,6 @@
       min-width: 80px;
     }
 
-    /* General Controls */
     .general-controls {
       display: flex;
       gap: 10px;
@@ -763,4 +355,383 @@
       animation: dots 1.5s infinite;
     }
 
-    @key
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
+    }
+
+    .user-side::-webkit-scrollbar,
+    .assistant-side::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .user-side::-webkit-scrollbar-track {
+      background: rgba(52, 73, 94, 0.3);
+    }
+
+    .assistant-side::-webkit-scrollbar-track {
+      background: rgba(39, 174, 96, 0.3);
+    }
+
+    .user-side::-webkit-scrollbar-thumb {
+      background: rgba(236, 240, 241, 0.5);
+      border-radius: 3px;
+    }
+
+    .assistant-side::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 3px;
+    }
+
+    .status-message {
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    .status-success {
+      background: #27ae60;
+      color: white;
+    }
+
+    .status-error {
+      background: #e74c3c;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="knowledge-status" id="knowledge-status">
+      🧠 Professional Knowledge Base Active
+    </div>
+    <div class="personal-docs-status" id="personal-docs-status">
+      📁 0 Personal Documents
+    </div>
+    <h1>Therapeutic AI Co-Therapist</h1>
+    <a href="/admin" class="admin-link">Admin Panel</a>
+  </div>
+
+  <div class="chat-container">
+    <div class="user-side">
+      <div class="side-header">Your Messages</div>
+      <div id="user-messages"></div>
+    </div>
+
+    <div class="assistant-side">
+      <div class="side-header">AI Therapist Responses</div>
+      <div id="assistant-messages">
+        <div class="loading" id="loading-indicator">
+          <span class="typing-dots">AI is thinking</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="input-container">
+      <textarea id="user-input" placeholder="Share what's on your mind..." rows="1"></textarea>
+      <div class="control-buttons">
+        <select id="agent-select">
+          <option value="therapist">🧠 Therapist (Claude)</option>
+          <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
+          <option value="research_critic">🧐 Research Critic (GPT)</option>
+          <option value="therapy_planner">📋 Therapy Planner (GPT)</option>
+        </select>
+        <button type="button" id="send-btn">Send</button>
+        <button type="button" id="clear-btn">Clear Chat</button>
+      </div>
+    </div>
+    
+    <div class="upload-sections">
+      <div class="admin-upload-section" id="admin-upload-section">
+        <div class="upload-label">🔒 Admin: Global Knowledge Base</div>
+        <input type="file" class="pdf-upload" id="admin-pdf-upload" accept="application/pdf">
+        <button type="button" class="upload-btn" id="admin-upload-btn">Upload</button>
+        <span id="admin-upload-status" class="status-message" style="display: none;"></span>
+      </div>
+      
+      <div class="user-upload-section">
+        <div class="upload-label">📁 Your Personal Documents</div>
+        <input type="file" class="pdf-upload" id="user-pdf-upload" accept="application/pdf">
+        <button type="button" class="upload-btn" id="user-upload-btn">Upload</button>
+        <button type="button" class="upload-btn" id="clear-docs-btn">Clear Docs</button>
+        <span id="user-upload-status" class="status-message" style="display: none;"></span>
+      </div>
+      
+      <div class="general-controls">
+        <button type="button" id="download-btn">Download Session</button>
+        <span style="color: #27ae60; font-size: 13px;">
+          💡 Upload therapy notes, session summaries, or personal context - they stay private to your session
+        </span>
+        <span id="general-status" class="status-message" style="display: none;"></span>
+      </div>
+    </div>
+
+    <div class="voice-controls">
+      <label>
+        <input type="checkbox" id="voice-toggle"> 🔊 Voice Output
+      </label>
+      <select id="voice-select"></select>
+    </div>
+  </div>
+
+  <script>
+    const userMessages = document.getElementById('user-messages');
+    const assistantMessages = document.getElementById('assistant-messages');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const agentSelect = document.getElementById('agent-select');
+    const voiceToggle = document.getElementById('voice-toggle');
+    const voiceSelect = document.getElementById('voice-select');
+    const loadingIndicator = document.getElementById('loading-indicator');
+    const knowledgeStatus = document.getElementById('knowledge-status');
+    const personalDocsStatus = document.getElementById('personal-docs-status');
+    const adminUploadSection = document.getElementById('admin-upload-section');
+
+    const adminPdfUpload = document.getElementById('admin-pdf-upload');
+    const adminUploadBtn = document.getElementById('admin-upload-btn');
+    const adminUploadStatus = document.getElementById('admin-upload-status');
+
+    const userPdfUpload = document.getElementById('user-pdf-upload');
+    const userUploadBtn = document.getElementById('user-upload-btn');
+    const userUploadStatus = document.getElementById('user-upload-status');
+    const clearDocsBtn = document.getElementById('clear-docs-btn');
+    const generalStatus = document.getElementById('general-status');
+
+    let isAdmin = {{ 'true' if is_admin else 'false' }};
+    if (isAdmin) {
+      adminUploadSection.classList.add('visible');
+    }
+
+    let voices = [];
+    function loadVoices() {
+      voices = window.speechSynthesis.getVoices();
+      voiceSelect.innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join('');
+    }
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    loadVoices();
+
+    async function loadKnowledgeStatus() {
+      try {
+        const response = await fetch('/knowledge-base');
+        const data = await response.json();
+        knowledgeStatus.textContent = `🧠 ${data.total_documents} Professional Resources`;
+      } catch (error) {
+        knowledgeStatus.textContent = '🧠 Professional Knowledge Loading...';
+      }
+    }
+
+    async function loadPersonalDocsStatus() {
+      try {
+        const response = await fetch('/personal-documents');
+        const data = await response.json();
+        const count = data.personal_documents.length;
+        personalDocsStatus.textContent = `📁 ${count} Personal Document${count !== 1 ? 's' : ''}`;
+      } catch (error) {
+        personalDocsStatus.textContent = '📁 Personal Docs Loading...';
+      }
+    }
+
+    userInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    userInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    function addMessage(content, isUser) {
+      const messageDiv = document.createElement('div');
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      
+      messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+      messageDiv.innerHTML = `
+        <div>${content}</div>
+        <div class="message-time">${timeStr}</div>
+      `;
+      
+      if (isUser) {
+        userMessages.appendChild(messageDiv);
+        userMessages.scrollTop = userMessages.scrollHeight;
+      } else {
+        assistantMessages.appendChild(messageDiv);
+        assistantMessages.scrollTop = assistantMessages.scrollHeight;
+      }
+    }
+
+    function showLoading(show) {
+      loadingIndicator.style.display = show ? 'block' : 'none';
+      if (show) {
+        assistantMessages.scrollTop = assistantMessages.scrollHeight;
+      }
+    }
+
+    function showStatus(element, message, isSuccess) {
+      element.textContent = message;
+      element.className = `status-message ${isSuccess ? 'status-success' : 'status-error'}`;
+      element.style.display = 'inline-block';
+      
+      setTimeout(() => {
+        element.style.display = 'none';
+      }, 4000);
+    }
+
+    async function sendMessage() {
+      const input = userInput.value.trim();
+      if (!input) return;
+
+      addMessage(input, true);
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      showLoading(true);
+
+      try {
+        const agent = agentSelect.value;
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_input: input, agent })
+        });
+        
+        const data = await response.json();
+        
+        showLoading(false);
+        addMessage(data.response || data.error || "No response received", false);
+
+        if (voiceToggle.checked && data.response) {
+          const utter = new SpeechSynthesisUtterance(data.response);
+          const selectedVoice = voices.find(v => v.name === voiceSelect.value);
+          if (selectedVoice) utter.voice = selectedVoice;
+          window.speechSynthesis.speak(utter);
+        }
+      } catch (error) {
+        showLoading(false);
+        addMessage(`Error: ${error.message}`, false);
+      }
+    }
+
+    if (isAdmin && adminUploadBtn) {
+      adminUploadBtn.addEventListener("click", async () => {
+        const file = adminPdfUpload.files[0];
+        if (!file) {
+          showStatus(adminUploadStatus, "Please choose a PDF file first", false);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("pdf", file);
+        formData.append("upload_type", "admin");
+
+        try {
+          showStatus(adminUploadStatus, "Uploading to global knowledge base...", true);
+          
+          const response = await fetch("/upload", {
+            method: "POST",
+            body: formData
+          });
+          
+          const result = await response.json();
+          
+          if (result.success) {
+            showStatus(adminUploadStatus, result.message, true);
+            adminPdfUpload.value = '';
+            loadKnowledgeStatus();
+          } else {
+            showStatus(adminUploadStatus, result.message, false);
+          }
+        } catch (error) {
+          showStatus(adminUploadStatus, "Upload failed: " + error.message, false);
+        }
+      });
+    }
+
+    userUploadBtn.addEventListener("click", async () => {
+      const file = userPdfUpload.files[0];
+      if (!file) {
+        showStatus(userUploadStatus, "Please choose a PDF file first", false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("pdf", file);
+      formData.append("upload_type", "personal");
+
+      try {
+        showStatus(userUploadStatus, "Uploading to your session...", true);
+        
+        const response = await fetch("/upload", {
+          method: "POST",
+          body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          showStatus(userUploadStatus, result.message, true);
+          userPdfUpload.value = '';
+          loadPersonalDocsStatus();
+        } else {
+          showStatus(userUploadStatus, result.message, false);
+        }
+      } catch (error) {
+        showStatus(userUploadStatus, "Upload failed: " + error.message, false);
+      }
+    });
+
+    clearDocsBtn.addEventListener("click", async () => {
+      if (!confirm("Clear all your personal documents? This cannot be undone.")) return;
+      
+      try {
+        const response = await fetch("/clear-documents", { method: "POST" });
+        const result = await response.json();
+        showStatus(userUploadStatus, result.message, true);
+        loadPersonalDocsStatus();
+      } catch (error) {
+        showStatus(userUploadStatus, "Clear failed: " + error.message, false);
+      }
+    });
+
+    document.getElementById("clear-btn").addEventListener("click", async () => {
+      try {
+        await fetch("/clear", { method: "POST" });
+        userMessages.innerHTML = '';
+        assistantMessages.innerHTML = '<div class="loading" id="loading-indicator"><span class="typing-dots">AI is thinking</span></div>';
+        loadingIndicator = document.getElementById('loading-indicator');
+        showStatus(generalStatus, "Chat cleared (documents retained)", true);
+      } catch (error) {
+        showStatus(generalStatus, "Clear failed: " + error.message, false);
+      }
+    });
+
+    document.getElementById("download-btn").addEventListener("click", async () => {
+      try {
+        const res = await fetch("/log");
+        const log = await res.json();
+        const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "therapeutic_session.json";
+        link.click();
+        showStatus(generalStatus, "Session downloaded", true);
+      } catch (error) {
+        showStatus(generalStatus, "Download failed: " + error.message, false);
+      }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+
+    loadKnowledgeStatus();
+    loadPersonalDocsStatus();
+    userInput.focus();
+  </script>
+</body>
+</html>
