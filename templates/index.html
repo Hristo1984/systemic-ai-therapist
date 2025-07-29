@@ -5,85 +5,643 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Therapeutic AI Co-Therapist</title>
   <style>
+    :root {
+      /* Research-based professional therapeutic palette */
+      --primary-trust-blue: #4A90B8;
+      --secondary-healing-sage: #7FB069;
+      --accent-warm-teal: #5DADE2;
+      --neutral-pure-white: #FFFFFF;
+      --neutral-soft-gray: #F8F9FA;
+      --neutral-border: #E8ECF0;
+      --text-primary: #2C3E50;
+      --text-secondary: #546E7A;
+      --text-muted: #90A4AE;
+      --success-green: #4CAF50;
+      --warning-amber: #FF9800;
+      --error-red: #F44336;
+      
+      /* Professional shadows and effects */
+      --shadow-soft: 0 2px 8px rgba(44, 62, 80, 0.08);
+      --shadow-medium: 0 4px 16px rgba(44, 62, 80, 0.12);
+      --shadow-strong: 0 8px 32px rgba(44, 62, 80, 0.16);
+      --border-radius: 12px;
+      --border-radius-large: 16px;
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      height: 100vh;
+      overflow: hidden;
+      background: linear-gradient(135deg, #F8F9FA 0%, #E8ECF0 100%);
+      color: var(--text-primary);
+    }
+
+    /* Professional header with trust elements */
+    .header {
+      background: var(--neutral-pure-white);
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--neutral-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: var(--shadow-soft);
+      position: relative;
+      z-index: 100;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--primary-trust-blue), var(--accent-warm-teal));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 18px;
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--neutral-soft-gray);
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: var(--transition);
+    }
+
+    .status-indicator:hover {
+      background: var(--neutral-border);
+      transform: translateY(-1px);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--success-green);
+    }
+
+    .admin-link {
+      padding: 8px 16px;
+      background: var(--primary-trust-blue);
+      color: white;
+      text-decoration: none;
+      border-radius: var(--border-radius);
+      font-size: 14px;
+      font-weight: 500;
+      transition: var(--transition);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .admin-link:hover {
+      background: #3A7BA8;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-medium);
+    }
+
+    /* Professional chat interface */
+    .chat-container {
+      display: flex;
+      height: calc(100vh - 240px);
+      margin: 20px;
+      border-radius: var(--border-radius-large);
+      overflow: hidden;
+      box-shadow: var(--shadow-medium);
+      background: var(--neutral-pure-white);
+    }
+
+    .chat-side {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--neutral-border);
+      background: var(--neutral-soft-gray);
+    }
+
+    .chat-header h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .chat-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .messages-container {
+      flex: 1;
+      padding: 24px;
+      overflow-y: auto;
+      background: var(--neutral-pure-white);
+    }
+
+    .user-side {
+      border-right: 1px solid var(--neutral-border);
+    }
+
+    .user-side .chat-header {
+      background: linear-gradient(135deg, rgba(74, 144, 184, 0.08), rgba(93, 173, 226, 0.05));
+    }
+
+    .assistant-side .chat-header {
+      background: linear-gradient(135deg, rgba(127, 176, 105, 0.08), rgba(76, 175, 80, 0.05));
+    }
+
+    /* Professional message bubbles */
+    .message {
+      margin-bottom: 16px;
+      animation: messageSlide 0.4s ease-out;
+    }
+
+    @keyframes messageSlide {
+      from {
+        opacity: 0;
+        transform: translateY(12px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .message-bubble {
+      max-width: 80%;
+      padding: 14px 18px;
+      border-radius: var(--border-radius);
+      font-size: 15px;
+      line-height: 1.5;
+      box-shadow: var(--shadow-soft);
+      position: relative;
+    }
+
+    .user-message .message-bubble {
+      background: linear-gradient(135deg, var(--primary-trust-blue), #3A7BA8);
+      color: white;
+      margin-left: 0;
+      border-bottom-left-radius: 4px;
+    }
+
+    .assistant-message {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .assistant-message .message-bubble {
+      background: linear-gradient(135deg, var(--secondary-healing-sage), #6DA058);
+      color: white;
+      margin-right: 0;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message-time {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 6px;
+      font-weight: 500;
+    }
+
+    .typing-indicator {
+      display: none;
+      padding: 14px 18px;
+      background: var(--neutral-border);
+      border-radius: var(--border-radius);
+      color: var(--text-muted);
+      font-style: italic;
+      max-width: 80%;
+      margin-left: auto;
+      border-bottom-right-radius: 4px;
+    }
+
+    .typing-dots::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
+    }
+
+    /* Professional controls panel */
+    .controls {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--neutral-pure-white);
+      border-top: 1px solid var(--neutral-border);
+      padding: 20px;
+      box-shadow: 0 -4px 16px rgba(44, 62, 80, 0.08);
+    }
+
+    .input-section {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+    }
+
+    #user-input {
+      flex: 1;
+      padding: 14px 18px;
+      border: 2px solid var(--neutral-border);
+      border-radius: var(--border-radius);
+      background: var(--neutral-pure-white);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 15px;
+      resize: none;
+      min-height: 48px;
+      max-height: 120px;
+      outline: none;
+      transition: var(--transition);
+      box-shadow: var(--shadow-soft);
+    }
+
+    #user-input:focus {
+      border-color: var(--primary-trust-blue);
+      box-shadow: 0 0 0 3px rgba(74, 144, 184, 0.15);
+    }
+
+    #user-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .control-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 12px 20px;
+      border: 2px solid transparent;
+      border-radius: var(--border-radius);
+      background: var(--neutral-soft-gray);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition);
+      box-shadow: var(--shadow-soft);
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: var(--primary-trust-blue);
+      color: white;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-medium);
+    }
+
+    .btn-primary {
+      background: var(--primary-trust-blue);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #3A7BA8;
+    }
+
+    /* Professional feature panels */
+    .feature-panels {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .feature-panel {
+      padding: 16px 20px;
+      background: var(--neutral-soft-gray);
+      border: 1px solid var(--neutral-border);
+      border-radius: var(--border-radius);
+      transition: var(--transition);
+    }
+
+    .feature-panel:hover {
+      background: var(--neutral-pure-white);
+      box-shadow: var(--shadow-soft);
+      transform: translateY(-1px);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .panel-icon {
+      font-size: 16px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .panel-content {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .file-input {
+      padding: 6px 12px;
+      border: 1px solid var(--neutral-border);
+      border-radius: 6px;
+      background: var(--neutral-pure-white);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+
+    .status-message {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .status-success {
+      background: rgba(76, 175, 80, 0.1);
+      color: var(--success-green);
+      border: 1px solid rgba(76, 175, 80, 0.2);
+    }
+
+    .status-error {
+      background: rgba(244, 67, 54, 0.1);
+      color: var(--error-red);
+      border: 1px solid rgba(244, 67, 54, 0.2);
+    }
+
+    /* Admin-only features */
+    .admin-panel {
+      display: none;
+      background: rgba(244, 67, 54, 0.05);
+      border-color: rgba(244, 67, 54, 0.2);
+    }
+
+    .admin-panel.visible {
+      display: block;
+    }
+
+    .admin-panel .panel-title {
+      color: var(--error-red);
+    }
+
+    /* Professional scrollbars */
+    .messages-container::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .messages-container::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .messages-container::-webkit-scrollbar-thumb {
+      background: var(--neutral-border);
+      border-radius: 3px;
+    }
+
+    .messages-container::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    /* Accessibility and responsive design */
+    @media (max-width: 768px) {
+      .header {
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px;
+      }
+
+      .header-status {
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .chat-container {
+        flex-direction: column;
+        height: calc(100vh - 300px);
+        margin: 10px;
+      }
+
+      .chat-side {
+        min-height: 200px;
+      }
+
+      .input-section {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .control-buttons {
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .feature-panels {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+    }
+
+    /* High contrast mode */
+    @media (prefers-contrast: high) {
+      :root {
+        --neutral-border: #000000;
+        --text-muted: #000000;
+        --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Focus indicators for keyboard navigation */
+    .btn:focus,
+    #user-input:focus,
+    .admin-link:focus {
+      outline: 3px solid rgba(74, 144, 184, 0.5);
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="knowledge-status" id="knowledge-status">
-      🧠 Professional Knowledge Base Active
+  <header class="header">
+    <div class="header-brand">
+      <div class="brand-icon">AI</div>
+      <div class="brand-text">
+        <h1>Therapeutic AI Co-Therapist</h1>
+        <div class="brand-subtitle">Professional Mental Health Support</div>
+      </div>
     </div>
-    <div class="personal-docs-status" id="personal-docs-status">
-      📁 0 Personal Documents
+    
+    <div class="header-status">
+      <div class="status-indicator" id="knowledge-status">
+        <div class="status-dot"></div>
+        <span>Professional Knowledge Active</span>
+      </div>
+      <div class="status-indicator" id="personal-docs-status">
+        <div class="status-dot" style="background: var(--accent-warm-teal);"></div>
+        <span>0 Personal Documents</span>
+      </div>
+      <a href="/admin" class="admin-link">Admin Panel</a>
     </div>
-    <h1>Therapeutic AI Co-Therapist</h1>
-    <a href="/admin" class="admin-link">Admin Panel</a>
-  </div>
+  </header>
 
-  <div class="chat-container">
-    <div class="user-side">
-      <div class="side-header">Your Messages</div>
-      <div id="user-messages"></div>
+  <main class="chat-container">
+    <div class="chat-side user-side">
+      <div class="chat-header">
+        <h3>Your Messages</h3>
+        <div class="chat-subtitle">Share your thoughts in a safe space</div>
+      </div>
+      <div class="messages-container" id="user-messages">
+        <!-- User messages will appear here -->
+      </div>
     </div>
 
-    <div class="assistant-side">
-      <div class="side-header">AI Therapist Responses</div>
-      <div id="assistant-messages">
-        <div class="loading" id="loading-indicator">
+    <div class="chat-side assistant-side">
+      <div class="chat-header">
+        <h3>AI Therapist Responses</h3>
+        <div class="chat-subtitle">Evidence-based therapeutic guidance</div>
+      </div>
+      <div class="messages-container" id="assistant-messages">
+        <div class="typing-indicator" id="typing-indicator">
           <span class="typing-dots">AI is thinking</span>
         </div>
       </div>
     </div>
-  </div>
+  </main>
 
   <div class="controls">
-    <div class="input-container">
-      <textarea id="user-input" placeholder="Share what's on your mind..." rows="1"></textarea>
+    <div class="input-section">
+      <textarea 
+        id="user-input" 
+        placeholder="Share what's on your mind..." 
+        rows="1"
+        aria-label="Message input"
+      ></textarea>
       <div class="control-buttons">
-        <select id="agent-select">
+        <select id="agent-select" class="btn">
           <option value="therapist">🧠 Therapist (Claude)</option>
-          <option value="case_assistant">🫧 Casework Assistant (Claude)</option>
-          <option value="research_critic">🧐 Research Critic (GPT)</option>
-          <option value="therapy_planner">📋 Therapy Planner (GPT)</option>
+          <option value="case_assistant">🫧 Casework Assistant</option>
+          <option value="research_critic">🧐 Research Critic</option>
+          <option value="therapy_planner">📋 Therapy Planner</option>
         </select>
-        <button type="button" id="send-btn">Send</button>
-        <button type="button" id="clear-btn">Clear Chat</button>
+        <button type="button" class="btn btn-primary" id="send-btn">Send</button>
+        <button type="button" class="btn" id="clear-btn">Clear Chat</button>
       </div>
     </div>
     
-    <div class="upload-sections">
-      <div class="admin-upload-section" id="admin-upload-section">
-        <div class="upload-label">🔒 Admin: Global Knowledge Base</div>
-        <input type="file" class="pdf-upload" id="admin-pdf-upload" accept="application/pdf">
-        <button type="button" class="upload-btn" id="admin-upload-btn">Upload</button>
-        <span id="admin-upload-status" class="status-message" style="display: none;"></span>
+    <div class="feature-panels">
+      <div class="feature-panel admin-panel" id="admin-panel">
+        <div class="panel-header">
+          <span class="panel-icon">🔒</span>
+          <span class="panel-title">Admin: Global Knowledge Base</span>
+        </div>
+        <div class="panel-content">
+          <input type="file" class="file-input" id="admin-pdf-upload" accept="application/pdf">
+          <button type="button" class="btn btn-small" id="admin-upload-btn">Upload</button>
+          <span id="admin-upload-status" class="status-message" style="display: none;"></span>
+        </div>
       </div>
       
-      <div class="user-upload-section">
-        <div class="upload-label">📁 Your Personal Documents</div>
-        <input type="file" class="pdf-upload" id="user-pdf-upload" accept="application/pdf">
-        <button type="button" class="upload-btn" id="user-upload-btn">Upload</button>
-        <button type="button" class="upload-btn" id="clear-docs-btn">Clear Docs</button>
-        <span id="user-upload-status" class="status-message" style="display: none;"></span>
+      <div class="feature-panel">
+        <div class="panel-header">
+          <span class="panel-icon">📁</span>
+          <span class="panel-title">Your Personal Documents</span>
+        </div>
+        <div class="panel-content">
+          <input type="file" class="file-input" id="user-pdf-upload" accept="application/pdf">
+          <button type="button" class="btn btn-small" id="user-upload-btn">Upload</button>
+          <button type="button" class="btn btn-small" id="clear-docs-btn">Clear</button>
+          <span id="user-upload-status" class="status-message" style="display: none;"></span>
+        </div>
       </div>
       
-      <div class="general-controls">
-        <button type="button" id="download-btn">Download Session</button>
-        <span style="color: #ffffff; font-size: 15px; font-weight: 500;">
-          💡 Upload therapy notes, session summaries, or personal context - they stay private to your session
-        </span>
-        <span id="general-status" class="status-message" style="display: none;"></span>
+      <div class="feature-panel">
+        <div class="panel-header">
+          <span class="panel-icon">⚙️</span>
+          <span class="panel-title">Session Tools</span>
+        </div>
+        <div class="panel-content">
+          <button type="button" class="btn btn-small" id="download-btn">Download Session</button>
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary);">
+            <input type="checkbox" id="voice-toggle" style="margin: 0;">
+            🔊 Voice Output
+          </label>
+          <select id="voice-select" class="btn btn-small" style="min-width: 120px;"></select>
+          <span id="general-status" class="status-message" style="display: none;"></span>
+        </div>
       </div>
-    </div>
-
-    <div class="voice-controls">
-      <label>
-        <input type="checkbox" id="voice-toggle"> 🔊 Voice Output
-      </label>
-      <select id="voice-select"></select>
     </div>
   </div>
 
@@ -95,41 +653,47 @@
     const agentSelect = document.getElementById('agent-select');
     const voiceToggle = document.getElementById('voice-toggle');
     const voiceSelect = document.getElementById('voice-select');
-    const loadingIndicator = document.getElementById('loading-indicator');
+    const typingIndicator = document.getElementById('typing-indicator');
     const knowledgeStatus = document.getElementById('knowledge-status');
     const personalDocsStatus = document.getElementById('personal-docs-status');
-    const adminUploadSection = document.getElementById('admin-upload-section');
+    const adminPanel = document.getElementById('admin-panel');
 
+    // Element references for upload functionality
     const adminPdfUpload = document.getElementById('admin-pdf-upload');
     const adminUploadBtn = document.getElementById('admin-upload-btn');
     const adminUploadStatus = document.getElementById('admin-upload-status');
-
     const userPdfUpload = document.getElementById('user-pdf-upload');
     const userUploadBtn = document.getElementById('user-upload-btn');
     const userUploadStatus = document.getElementById('user-upload-status');
     const clearDocsBtn = document.getElementById('clear-docs-btn');
     const generalStatus = document.getElementById('general-status');
 
+    // Check admin status
     let isAdmin = {{ 'true' if is_admin else 'false' }};
     if (isAdmin) {
-      adminUploadSection.classList.add('visible');
+      adminPanel.classList.add('visible');
     }
 
+    // Voice functionality
     let voices = [];
     function loadVoices() {
       voices = window.speechSynthesis.getVoices();
-      voiceSelect.innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join('');
+      voiceSelect.innerHTML = voices.map(v => 
+        `<option value="${v.name}">${v.name} (${v.lang})</option>`
+      ).join('');
     }
     window.speechSynthesis.onvoiceschanged = loadVoices;
     loadVoices();
 
+    // Status loading functions
     async function loadKnowledgeStatus() {
       try {
         const response = await fetch('/knowledge-base');
         const data = await response.json();
-        knowledgeStatus.textContent = `🧠 ${data.total_documents} Professional Resources`;
+        knowledgeStatus.querySelector('span').textContent = 
+          `${data.total_documents} Professional Resources`;
       } catch (error) {
-        knowledgeStatus.textContent = '🧠 Professional Knowledge Loading...';
+        knowledgeStatus.querySelector('span').textContent = 'Knowledge Loading...';
       }
     }
 
@@ -138,17 +702,20 @@
         const response = await fetch('/personal-documents');
         const data = await response.json();
         const count = data.personal_documents.length;
-        personalDocsStatus.textContent = `📁 ${count} Personal Document${count !== 1 ? 's' : ''}`;
+        personalDocsStatus.querySelector('span').textContent = 
+          `${count} Personal Document${count !== 1 ? 's' : ''}`;
       } catch (error) {
-        personalDocsStatus.textContent = '📁 Personal Docs Loading...';
+        personalDocsStatus.querySelector('span').textContent = 'Personal Docs Loading...';
       }
     }
 
+    // Auto-resize textarea
     userInput.addEventListener('input', function() {
       this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
+    // Send on Enter
     userInput.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -156,6 +723,7 @@
       }
     });
 
+    // Message handling
     function addMessage(content, isUser) {
       const messageDiv = document.createElement('div');
       const now = new Date();
@@ -163,8 +731,10 @@
       
       messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
       messageDiv.innerHTML = `
-        <div>${content}</div>
-        <div class="message-time">${timeStr}</div>
+        <div class="message-bubble">
+          ${content}
+          <div class="message-time">${timeStr}</div>
+        </div>
       `;
       
       if (isUser) {
@@ -176,8 +746,8 @@
       }
     }
 
-    function showLoading(show) {
-      loadingIndicator.style.display = show ? 'block' : 'none';
+    function showTyping(show) {
+      typingIndicator.style.display = show ? 'block' : 'none';
       if (show) {
         assistantMessages.scrollTop = assistantMessages.scrollHeight;
       }
@@ -193,6 +763,7 @@
       }, 5000);
     }
 
+    // Send message function
     async function sendMessage() {
       const input = userInput.value.trim();
       if (!input) return;
@@ -200,7 +771,7 @@
       addMessage(input, true);
       userInput.value = '';
       userInput.style.height = 'auto';
-      showLoading(true);
+      showTyping(true);
 
       try {
         const agent = agentSelect.value;
@@ -212,7 +783,7 @@
         
         const data = await response.json();
         
-        showLoading(false);
+        showTyping(false);
         addMessage(data.response || data.error || "No response received", false);
 
         if (voiceToggle.checked && data.response) {
@@ -222,11 +793,12 @@
           window.speechSynthesis.speak(utter);
         }
       } catch (error) {
-        showLoading(false);
+        showTyping(false);
         addMessage(`Error: ${error.message}`, false);
       }
     }
 
+    // Upload functionality
     if (isAdmin && adminUploadBtn) {
       adminUploadBtn.addEventListener("click", async () => {
         const file = adminPdfUpload.files[0];
@@ -312,8 +884,8 @@
       try {
         await fetch("/clear", { method: "POST" });
         userMessages.innerHTML = '';
-        assistantMessages.innerHTML = '<div class="loading" id="loading-indicator"><span class="typing-dots">AI is thinking</span></div>';
-        loadingIndicator = document.getElementById('loading-indicator');
+        assistantMessages.innerHTML = '<div class="typing-indicator" id="typing-indicator"><span class="typing-dots">AI is thinking</span></div>';
+        typingIndicator = document.getElementById('typing-indicator');
         showStatus(generalStatus, "Chat cleared (documents retained)", true);
       } catch (error) {
         showStatus(generalStatus, "Clear failed: " + error.message, false);
@@ -335,480 +907,13 @@
       }
     });
 
+    // Event listeners
     sendBtn.addEventListener('click', sendMessage);
 
+    // Initialize
     loadKnowledgeStatus();
     loadPersonalDocsStatus();
     userInput.focus();
   </script>
 </body>
 </html>
-
-    body {
-      font-family: Georgia, serif;
-      font-size: 16px;
-      height: 100vh;
-      overflow: hidden;
-      background: #f7f9fc;
-      color: #2c3e50;
-    }
-
-    .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      padding: 20px 25px;
-      border-bottom: 3px solid #5a67d8;
-      text-align: center;
-      position: relative;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-
-    .header h1 {
-      font-size: 28px;
-      font-weight: normal;
-      color: #ffffff;
-      text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-    }
-
-    .knowledge-status {
-      position: absolute;
-      top: 20px;
-      left: 25px;
-      font-size: 14px;
-      color: #ffffff;
-      background: rgba(76, 175, 80, 0.9);
-      padding: 8px 12px;
-      border-radius: 20px;
-      border: 2px solid rgba(255, 255, 255, 0.3);
-      font-weight: 500;
-    }
-
-    .personal-docs-status {
-      position: absolute;
-      top: 55px;
-      left: 25px;
-      font-size: 13px;
-      color: #ffffff;
-      background: rgba(33, 150, 243, 0.9);
-      padding: 6px 10px;
-      border-radius: 15px;
-      border: 2px solid rgba(255, 255, 255, 0.3);
-      font-weight: 500;
-    }
-
-    .admin-link {
-      position: absolute;
-      top: 20px;
-      right: 25px;
-      color: #ffffff;
-      text-decoration: none;
-      font-size: 16px;
-      background: rgba(255, 255, 255, 0.2);
-      padding: 8px 15px;
-      border-radius: 20px;
-      transition: all 0.3s;
-      border: 2px solid rgba(255, 255, 255, 0.3);
-    }
-
-    .admin-link:hover {
-      background: rgba(255, 255, 255, 0.3);
-      transform: translateY(-1px);
-    }
-
-    .chat-container {
-      display: flex;
-      height: calc(100vh - 280px);
-      margin: 15px;
-      border-radius: 15px;
-      overflow: hidden;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-      border: 3px solid #e1e8ed;
-    }
-
-    .user-side {
-      flex: 1;
-      background: linear-gradient(135deg, #a8d5e2 0%, #7fcdcd 100%);
-      padding: 25px;
-      overflow-y: auto;
-      border-right: 4px solid #6bb6d6;
-    }
-
-    .assistant-side {
-      flex: 1;
-      background: linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%);
-      padding: 25px;
-      overflow-y: auto;
-    }
-
-    .side-header {
-      text-align: center;
-      font-size: 20px;
-      font-weight: bold;
-      margin-bottom: 25px;
-      padding: 15px;
-      border-radius: 12px;
-      color: #2c3e50;
-      text-shadow: 1px 1px 2px rgba(255,255,255,0.7);
-    }
-
-    .user-side .side-header {
-      background: rgba(255, 255, 255, 0.6);
-      border: 2px solid rgba(107, 182, 214, 0.4);
-    }
-
-    .assistant-side .side-header {
-      background: rgba(255, 255, 255, 0.6);
-      border: 2px solid rgba(129, 199, 132, 0.4);
-    }
-
-    .message {
-      margin: 15px 0;
-      padding: 18px 20px;
-      border-radius: 20px;
-      line-height: 1.6;
-      font-size: 17px;
-      word-wrap: break-word;
-      animation: slideIn 0.4s ease-out;
-      max-width: 90%;
-      display: inline-block;
-      position: relative;
-      box-shadow: 0 3px 12px rgba(0,0,0,0.15);
-    }
-
-    @keyframes slideIn {
-      from {
-        opacity: 0;
-        transform: translateY(15px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    .user-message {
-      background: linear-gradient(135deg, #ffffff 0%, #f8f9ff 100%);
-      color: #2c3e50;
-      border: 2px solid #a8d5e2;
-      border-bottom-left-radius: 6px;
-      margin-left: 0;
-      margin-right: auto;
-    }
-
-    .assistant-message {
-      background: linear-gradient(135deg, #ffffff 0%, #f8fff8 100%);
-      color: #2e7d32;
-      border: 2px solid #a5d6a7;
-      border-bottom-right-radius: 6px;
-      margin-left: auto;
-      margin-right: 0;
-    }
-
-    .message-time {
-      font-size: 13px;
-      opacity: 0.7;
-      margin-top: 8px;
-      text-align: right;
-      font-weight: 500;
-    }
-
-    .user-message .message-time {
-      color: #546e7a;
-    }
-
-    .assistant-message .message-time {
-      color: #388e3c;
-    }
-
-    .controls {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      padding: 20px;
-      border-top: 3px solid #5a67d8;
-      box-shadow: 0 -2px 15px rgba(0,0,0,0.1);
-    }
-
-    .input-container {
-      display: flex;
-      gap: 12px;
-      max-width: 1400px;
-      margin: 0 auto;
-      align-items: flex-end;
-    }
-
-    #user-input {
-      flex: 1;
-      padding: 16px 20px;
-      border: 3px solid #ffffff;
-      border-radius: 25px;
-      background: #ffffff;
-      color: #2c3e50;
-      font-family: Georgia, serif;
-      font-size: 17px;
-      resize: none;
-      min-height: 50px;
-      max-height: 150px;
-      outline: none;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-
-    #user-input:focus {
-      border-color: #4caf50;
-      box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.3);
-    }
-
-    .control-buttons {
-      display: flex;
-      gap: 10px;
-    }
-
-    select, button {
-      padding: 14px 18px;
-      border: 3px solid #ffffff;
-      border-radius: 12px;
-      background: #ffffff;
-      color: #2c3e50;
-      font-family: Georgia, serif;
-      font-size: 16px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-
-    button:hover, select:hover {
-      background: #4caf50;
-      color: #ffffff;
-      border-color: #4caf50;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-    }
-
-    button:active {
-      transform: translateY(0);
-    }
-
-    .upload-sections {
-      margin-top: 15px;
-      max-width: 1400px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-
-    .admin-upload-section {
-      display: none;
-      gap: 12px;
-      align-items: center;
-      padding: 15px;
-      background: rgba(244, 67, 54, 0.15);
-      border-radius: 12px;
-      border: 3px solid rgba(244, 67, 54, 0.3);
-      margin-bottom: 10px;
-    }
-
-    .admin-upload-section.visible {
-      display: flex;
-    }
-
-    .user-upload-section {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      padding: 15px;
-      background: rgba(33, 150, 243, 0.15);
-      border-radius: 12px;
-      border: 3px solid rgba(33, 150, 243, 0.3);
-      margin-bottom: 10px;
-    }
-
-    .upload-label {
-      font-weight: bold;
-      font-size: 15px;
-      min-width: 200px;
-      color: #ffffff;
-    }
-
-    .admin-upload-section .upload-label {
-      color: #ffffff;
-    }
-
-    .user-upload-section .upload-label {
-      color: #ffffff;
-    }
-
-    .pdf-upload {
-      color: #2c3e50;
-      font-family: Georgia, serif;
-      padding: 10px 12px;
-      border: 2px solid #ffffff;
-      border-radius: 8px;
-      background: #ffffff;
-      font-size: 14px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-    }
-
-    .upload-btn {
-      padding: 10px 16px;
-      font-size: 14px;
-      min-width: 90px;
-    }
-
-    .general-controls {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      justify-content: center;
-      padding: 12px;
-      background: rgba(76, 175, 80, 0.15);
-      border-radius: 12px;
-      border: 3px solid rgba(76, 175, 80, 0.3);
-    }
-
-    .voice-controls {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-top: 10px;
-      font-size: 16px;
-      justify-content: center;
-    }
-
-    .voice-controls label {
-      color: #ffffff;
-      font-family: Georgia, serif;
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .voice-controls input[type="checkbox"] {
-      margin: 0;
-      transform: scale(1.2);
-    }
-
-    .loading {
-      display: none;
-      padding: 18px 20px;
-      background: linear-gradient(135deg, #ffffff 0%, #f8fff8 100%);
-      color: #2e7d32;
-      border: 2px solid #a5d6a7;
-      border-radius: 20px;
-      font-style: italic;
-      font-size: 17px;
-      max-width: 90%;
-      margin-left: auto;
-      margin-right: 0;
-      border-bottom-right-radius: 6px;
-      box-shadow: 0 3px 12px rgba(0,0,0,0.15);
-    }
-
-    .typing-dots {
-      display: inline-block;
-      font-weight: 500;
-    }
-
-    .typing-dots::after {
-      content: '';
-      animation: dots 1.5s infinite;
-    }
-
-    @keyframes dots {
-      0%, 20% { content: ''; }
-      40% { content: '.'; }
-      60% { content: '..'; }
-      80%, 100% { content: '...'; }
-    }
-
-    .user-side::-webkit-scrollbar,
-    .assistant-side::-webkit-scrollbar {
-      width: 8px;
-    }
-
-    .user-side::-webkit-scrollbar-track {
-      background: rgba(168, 213, 226, 0.3);
-      border-radius: 4px;
-    }
-
-    .assistant-side::-webkit-scrollbar-track {
-      background: rgba(165, 214, 167, 0.3);
-      border-radius: 4px;
-    }
-
-    .user-side::-webkit-scrollbar-thumb {
-      background: rgba(107, 182, 214, 0.7);
-      border-radius: 4px;
-    }
-
-    .assistant-side::-webkit-scrollbar-thumb {
-      background: rgba(129, 199, 132, 0.7);
-      border-radius: 4px;
-    }
-
-    .status-message {
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 14px;
-      margin-left: 10px;
-      font-weight: 500;
-    }
-
-    .status-success {
-      background: #4caf50;
-      color: white;
-      box-shadow: 0 2px 6px rgba(76, 175, 80, 0.3);
-    }
-
-    .status-error {
-      background: #f44336;
-      color: white;
-      box-shadow: 0 2px 6px rgba(244, 67, 54, 0.3);
-    }
-
-    /* Improved placeholder text */
-    #user-input::placeholder {
-      color: #90a4ae;
-      font-style: italic;
-    }
-
-    /* Better focus states */
-    button:focus, select:focus, input:focus {
-      outline: 3px solid rgba(76, 175, 80, 0.5);
-      outline-offset: 2px;
-    }
-
-    /* Responsive improvements */
-    @media (max-width: 768px) {
-      .header h1 {
-        font-size: 22px;
-      }
-      
-      .knowledge-status, .personal-docs-status {
-        position: static;
-        display: inline-block;
-        margin: 5px;
-      }
-      
-      .admin-link {
-        position: static;
-        display: block;
-        margin-top: 10px;
-      }
-      
-      .chat-container {
-        flex-direction: column;
-        height: calc(100vh - 320px);
-      }
-      
-      .input-container {
-        flex-direction: column;
-        gap: 8px;
-      }
-      
-      .control-buttons {
-        flex-wrap: wrap;
-        justify-content: center;
-      }
-    }
