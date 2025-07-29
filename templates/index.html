@@ -881,4 +881,53 @@
       }
     });
 
-    clearDocsBtn.addEventListener("click",
+    clearDocsBtn.addEventListener("click", async () => {
+      if (!confirm("Clear all your personal documents? This cannot be undone.")) return;
+      
+      try {
+        const response = await fetch("/clear-documents", { method: "POST" });
+        const result = await response.json();
+        showStatus(userUploadStatus, result.message, true);
+        loadPersonalDocsStatus();
+      } catch (error) {
+        showStatus(userUploadStatus, "Clear failed: " + error.message, false);
+      }
+    });
+
+    document.getElementById("clear-btn").addEventListener("click", async () => {
+      try {
+        await fetch("/clear", { method: "POST" });
+        userMessages.innerHTML = '';
+        assistantMessages.innerHTML = '<div class="typing-indicator" id="typing-indicator"><span class="typing-dots">AI is thinking</span></div>';
+        typingIndicator = document.getElementById('typing-indicator');
+        showStatus(generalStatus, "Chat cleared (documents retained)", true);
+      } catch (error) {
+        showStatus(generalStatus, "Clear failed: " + error.message, false);
+      }
+    });
+
+    document.getElementById("download-btn").addEventListener("click", async () => {
+      try {
+        const res = await fetch("/log");
+        const log = await res.json();
+        const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "therapeutic_session.json";
+        link.click();
+        showStatus(generalStatus, "Session downloaded", true);
+      } catch (error) {
+        showStatus(generalStatus, "Download failed: " + error.message, false);
+      }
+    });
+
+    // Event listeners
+    sendBtn.addEventListener('click', sendMessage);
+
+    // Initialize
+    loadKnowledgeStatus();
+    loadPersonalDocsStatus();
+    userInput.focus();
+  </script>
+</body>
+</html>
