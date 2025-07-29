@@ -670,6 +670,12 @@ def admin():
                          total_docs=len(knowledge_base["documents"]),
                          authorized_authors=knowledge_base.get("authorized_authors", []))
 
+@app.route("/admin/logout", methods=["GET"])
+def admin_logout():
+    """Admin logout route"""
+    session.pop("is_admin", None)
+    return redirect("/")
+
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
