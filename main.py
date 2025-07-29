@@ -3,7 +3,7 @@ import json
 import requests
 import hashlib
 import re
-# import fitz  # PyMuPDF - COMMENTED OUT temporarily for deployment
+import pdfplumber
 from datetime import datetime
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
@@ -88,23 +88,41 @@ def extract_authors_from_text(text, filename):
     return list(authors)
 
 def extract_text_from_pdf(file_path):
-    """TEMPORARY: Placeholder for PDF extraction - PyMuPDF disabled for deployment"""
+    """Extract text from PDF using pdfplumber - better quality extraction"""
     try:
-        print(f"PDF extraction temporarily disabled for: {file_path}")
-        # For now, return filename-based placeholder
-        filename = os.path.basename(file_path)
-        return f"PDF content placeholder for: {filename}\n\nPDF text extraction will be re-enabled after deployment with alternative library.\n\nFilename: {filename}"
+        print(f"Extracting text from PDF: {file_path}")
+        text_content = ""
+        
+        with pdfplumber.open(file_path) as pdf:
+            print(f"PDF has {len(pdf.pages)} pages")
+            
+            for page_num, page in enumerate(pdf.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content += f"\n--- Page {page_num + 1} ---\n"
+                        text_content += page_text + "\n"
+                except Exception as e:
+                    print(f"Error extracting page {page_num + 1}: {e}")
+                    continue
+        
+        if not text_content.strip():
+            return f"No text content could be extracted from {os.path.basename(file_path)}. The PDF may contain only images or be password protected."
+        
+        print(f"Successfully extracted {len(text_content)} characters from {os.path.basename(file_path)}")
+        return text_content
+        
     except Exception as e:
-        error_msg = f"Error with PDF placeholder for {os.path.basename(file_path)}: {str(e)}"
+        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
         print(error_msg)
-        return error_msg
+        return f"PDF extraction failed for {os.path.basename(file_path)}. Error: {str(e)}"
 
 def add_document_to_knowledge_base(file_path, filename, is_core=True):
     """Add document to ADMIN knowledge base and extract authors"""
     try:
         text_content = extract_text_from_pdf(file_path)
         
-        # Extract authors from the document (works with placeholder text too)
+        # Extract authors from the document
         extracted_authors = extract_authors_from_text(text_content, filename)
         
         doc_info = {
@@ -116,7 +134,7 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
             "character_count": len(text_content),
             "type": "admin_therapeutic_resource",
             "extracted_authors": extracted_authors,
-            "pdf_extraction_status": "placeholder_mode"  # Track that we're using placeholder
+            "pdf_extraction_status": "success"
         }
         
         # Add to global knowledge base
@@ -133,7 +151,7 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
         
         knowledge_base["total_documents"] = len(knowledge_base["documents"])
         save_knowledge_base(knowledge_base)
-        print(f"Added {filename} to knowledge base ({len(text_content)} characters) - PDF extraction in placeholder mode")
+        print(f"Added {filename} to knowledge base ({len(text_content)} characters)")
         print(f"Extracted authors: {extracted_authors}")
         
         return doc_info
@@ -243,12 +261,12 @@ def add_personal_document_to_session(file_path, filename, session_id):
             "character_count": len(text_content),
             "type": "user_personal_document",
             "session_id": session_id,
-            "pdf_extraction_status": "placeholder_mode"
+            "pdf_extraction_status": "success"
         }
         
         user_session = get_user_session(session_id)
         user_session["personal_documents"].append(doc_info)
-        print(f"Added {filename} to user session {session_id} ({len(text_content)} characters) - placeholder mode")
+        print(f"Added {filename} to user session {session_id} ({len(text_content)} characters)")
         
         return doc_info
     except Exception as e:
@@ -460,7 +478,7 @@ def upload():
             if doc_info:
                 authors_text = f" | Authors detected: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
                 return jsonify({
-                    "message": f"Added '{file.filename}' to controlled knowledge base ({doc_info['character_count']} characters){authors_text} [PDF extraction in placeholder mode]", 
+                    "message": f"Successfully extracted and added '{file.filename}' to controlled knowledge base ({doc_info['character_count']} characters){authors_text}", 
                     "success": True,
                     "type": "admin",
                     "extracted_authors": doc_info['extracted_authors']
@@ -472,7 +490,7 @@ def upload():
             
             if doc_info:
                 return jsonify({
-                    "message": f"Added '{file.filename}' to your personal session ({doc_info['character_count']} characters) [PDF extraction in placeholder mode]", 
+                    "message": f"Successfully extracted and added '{file.filename}' to your personal session ({doc_info['character_count']} characters)", 
                     "success": True,
                     "type": "personal"
                 })
@@ -574,8 +592,8 @@ def health():
         "knowledge_base_documents": len(knowledge_base["documents"]),
         "authorized_authors": len(knowledge_base.get("authorized_authors", [])),
         "controlled_knowledge_system": True,
-        "pdf_support": "placeholder_mode",  # Indicates temporary placeholder
-        "note": "Controlled knowledge system with placeholder PDF extraction (PyMuPDF disabled for deployment)"
+        "pdf_support": "pdfplumber_active",
+        "note": "Controlled knowledge system with pdfplumber PDF extraction"
     })
 
 if __name__ == "__main__":
