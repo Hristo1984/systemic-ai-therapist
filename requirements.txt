@@ -1,4 +1,6 @@
-# Update main.py with memory-optimized version
-# Update requirements.txt 
-# Add gunicorn.conf.py
-# Update Procfile
+flask==2.3.3
+gunicorn==21.2.0
+python-dotenv==1.0.0
+requests==2.32.4
+pdfplumber==0.9.0
+psutil==5.9.8
