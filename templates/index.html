@@ -85,7 +85,7 @@
     }
 
     .brand-subtitle {
-      font-size: 12px;
+      font-size: 11px; /* SMALLER - was 12px */
       color: var(--text-muted);
       font-weight: 500;
     }
@@ -100,10 +100,10 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 12px;
+      padding: 5px 10px; /* SMALLER - was 6px 12px */
       background: var(--neutral-soft-gray);
       border-radius: 20px;
-      font-size: 12px;
+      font-size: 11px; /* SMALLER - was 12px */
       font-weight: 500;
       color: var(--text-secondary);
       transition: var(--transition);
@@ -194,12 +194,13 @@
       background: linear-gradient(135deg, rgba(127, 176, 105, 0.08), rgba(76, 175, 80, 0.05));
     }
 
-    /* Centralized, natural message bubbles */
+    /* FIXED: Centralized, natural message bubbles */
     .message {
       margin-bottom: 16px;
       animation: messageSlide 0.4s ease-out;
       display: flex;
       align-items: flex-end;
+      padding: 0 30px; /* ADD PADDING TO CENTER THE CONVERSATION */
     }
 
     @keyframes messageSlide {
@@ -214,10 +215,10 @@
     }
 
     .message-bubble {
-      max-width: 70%;
+      max-width: 65%; /* SMALLER - was 70% for better centering */
       padding: 14px 18px;
       border-radius: var(--border-radius);
-      font-size: 15px;
+      font-size: 16px; /* LARGER for readability - was 15px */
       line-height: 1.5;
       box-shadow: var(--shadow-soft);
       position: relative;
@@ -226,7 +227,7 @@
 
     .user-message {
       justify-content: flex-start;
-      margin-left: 20px;
+      margin-left: 0; /* REMOVE extreme left positioning */
     }
 
     .user-message .message-bubble {
@@ -237,7 +238,7 @@
 
     .assistant-message {
       justify-content: flex-end;
-      margin-right: 20px;
+      margin-right: 0; /* REMOVE extreme right positioning */
     }
 
     .assistant-message .message-bubble {
@@ -260,8 +261,8 @@
       border-radius: var(--border-radius);
       color: var(--text-muted);
       font-style: italic;
-      max-width: 70%;
-      margin-right: 20px;
+      max-width: 65%; /* MATCH message bubbles */
+      margin-right: 30px; /* MATCH padding */
       margin-left: auto;
       border-bottom-right-radius: 4px;
     }
@@ -331,13 +332,13 @@
     }
 
     .btn {
-      padding: 12px 20px;
+      padding: 10px 16px; /* SMALLER - was 12px 20px */
       border: 2px solid transparent;
       border-radius: var(--border-radius);
       background: var(--neutral-soft-gray);
       color: var(--text-primary);
       font-family: inherit;
-      font-size: 13px;
+      font-size: 12px; /* SMALLER - was 13px */
       font-weight: 500;
       cursor: pointer;
       transition: var(--transition);
@@ -355,6 +356,7 @@
     .btn-primary {
       background: var(--primary-trust-blue);
       color: white;
+      font-size: 13px; /* Slightly larger for primary action */
     }
 
     .btn-primary:hover {
@@ -396,7 +398,7 @@
     }
 
     .panel-title {
-      font-size: 14px;
+      font-size: 13px; /* SMALLER - was 14px */
       font-weight: 600;
       color: var(--text-primary);
     }
@@ -409,24 +411,24 @@
     }
 
     .file-input {
-      padding: 6px 12px;
+      padding: 5px 10px; /* SMALLER - was 6px 12px */
       border: 1px solid var(--neutral-border);
       border-radius: 6px;
       background: var(--neutral-pure-white);
-      font-size: 12px;
+      font-size: 11px; /* SMALLER - was 12px */
       color: var(--text-secondary);
     }
 
     .btn-small {
-      padding: 6px 12px;
-      font-size: 12px;
+      padding: 5px 10px; /* SMALLER - was 6px 12px */
+      font-size: 11px; /* SMALLER - was 12px */
       border-radius: 6px;
     }
 
     .status-message {
-      padding: 4px 8px;
+      padding: 3px 6px; /* SMALLER - was 4px 8px */
       border-radius: 4px;
-      font-size: 11px;
+      font-size: 10px; /* SMALLER - was 11px */
       font-weight: 500;
     }
 
@@ -511,6 +513,11 @@
       .feature-panels {
         grid-template-columns: 1fr;
         gap: 12px;
+      }
+
+      /* Mobile message adjustments */
+      .message {
+        padding: 0 15px; /* Smaller padding on mobile */
       }
     }
 
@@ -874,53 +881,4 @@
       }
     });
 
-    clearDocsBtn.addEventListener("click", async () => {
-      if (!confirm("Clear all your personal documents? This cannot be undone.")) return;
-      
-      try {
-        const response = await fetch("/clear-documents", { method: "POST" });
-        const result = await response.json();
-        showStatus(userUploadStatus, result.message, true);
-        loadPersonalDocsStatus();
-      } catch (error) {
-        showStatus(userUploadStatus, "Clear failed: " + error.message, false);
-      }
-    });
-
-    document.getElementById("clear-btn").addEventListener("click", async () => {
-      try {
-        await fetch("/clear", { method: "POST" });
-        userMessages.innerHTML = '';
-        assistantMessages.innerHTML = '<div class="typing-indicator" id="typing-indicator"><span class="typing-dots">AI is thinking</span></div>';
-        typingIndicator = document.getElementById('typing-indicator');
-        showStatus(generalStatus, "Chat cleared (documents retained)", true);
-      } catch (error) {
-        showStatus(generalStatus, "Clear failed: " + error.message, false);
-      }
-    });
-
-    document.getElementById("download-btn").addEventListener("click", async () => {
-      try {
-        const res = await fetch("/log");
-        const log = await res.json();
-        const blob = new Blob([JSON.stringify(log, null, 2)], { type: "application/json" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = "therapeutic_session.json";
-        link.click();
-        showStatus(generalStatus, "Session downloaded", true);
-      } catch (error) {
-        showStatus(generalStatus, "Download failed: " + error.message, false);
-      }
-    });
-
-    // Event listeners
-    sendBtn.addEventListener('click', sendMessage);
-
-    // Initialize
-    loadKnowledgeStatus();
-    loadPersonalDocsStatus();
-    userInput.focus();
-  </script>
-</body>
-</html>
+    clearDocsBtn.addEventListener("click",
