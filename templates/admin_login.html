@@ -1,1 +1,180 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - Therapeutic AI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e8ecf0 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #2c3e50;
+        }
+        
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(44, 62, 80, 0.16);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        
+        .brand-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #4A90B8, #5DADE2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 24px;
+            margin: 0 auto 20px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+        
+        .subtitle {
+            font-size: 14px;
+            color: #90a4ae;
+            margin-bottom: 32px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #546e7a;
+        }
+        
+        input[type="password"] {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e8ecf0;
+            border-radius: 12px;
+            font-size: 16px;
+            background: white;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+        
+        input[type="password"]:focus {
+            border-color: #4A90B8;
+            box-shadow: 0 0 0 3px rgba(74, 144, 184, 0.15);
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: #4A90B8;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 16px;
+        }
+        
+        .login-btn:hover {
+            background: #3A7BA8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(74, 144, 184, 0.3);
+        }
+        
+        .back-link {
+            color: #4A90B8;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        
+        .error {
+            background: rgba(244, 67, 54, 0.1);
+            color: #f44336;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border: 1px solid rgba(244, 67, 54, 0.2);
+        }
+        
+        .admin-info {
+            background: rgba(74, 144, 184, 0.1);
+            color: #4A90B8;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            border: 1px solid rgba(74, 144, 184, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="brand-icon">🔒</div>
+        <h1>Admin Access</h1>
+        <p class="subtitle">Enter admin password to manage the knowledge base</p>
+        
+        <div class="admin-info">
+            <strong>Admin Features:</strong><br>
+            • Upload therapeutic resources to global knowledge base<br>
+            • Manage authorized authors<br>
+            • System administration tools
+        </div>
+        
+        {% if error %}
+        <div class="error">
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        <form method="POST">
+            <div class="form-group">
+                <label for="password">Admin Password:</label>
+                <input type="password" 
+                       id="password" 
+                       name="password" 
+                       placeholder="Enter admin password" 
+                       required 
+                       autofocus>
+            </div>
+            
+            <button type="submit" class="login-btn">
+                🔓 Access Admin Panel
+            </button>
+        </form>
+        
+        <a href="/" class="back-link">← Back to Therapeutic AI</a>
+    </div>
+</body>
+</html>
