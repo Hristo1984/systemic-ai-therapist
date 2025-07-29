@@ -3,10 +3,14 @@ import json
 import requests
 import hashlib
 import re
-import pdfplumber
-from datetime import datetime
+import sqlite3
+import uuid
+from datetime import datetime, timedelta
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
+import pdfplumber
+import gc
+from contextlib import contextmanager
 
 load_dotenv()
 app = Flask(__name__)
@@ -16,7 +20,7 @@ app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-change-this")
 with open("config.json", "r") as f:
     config = json.load(f)
 
-# Check for required environment variables
+# Environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
 claude_api_key = os.getenv("CLAUDE_API_KEY")
 admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -26,12 +30,9 @@ if not openai_api_key:
 if not claude_api_key:
     print("WARNING: CLAUDE_API_KEY not found in environment variables")
 
-# Globals
-user_sessions = {}
-
 # File paths
+DATABASE_FILE = "therapeutic_ai.db"
 KNOWLEDGE_BASE_FILE = "core_memory/knowledge_base.json"
-AUTHORIZED_AUTHORS_FILE = "core_memory/authorized_authors.json"
 CORE_MEMORY_DIR = "core_memory"
 UPLOADS_DIR = "uploads"
 USER_UPLOADS_DIR = "user_uploads"
@@ -40,25 +41,240 @@ USER_UPLOADS_DIR = "user_uploads"
 for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs"]:
     os.makedirs(directory, exist_ok=True)
 
-# CONTROLLED KNOWLEDGE SYSTEM
-def load_knowledge_base():
-    """Load ADMIN knowledge base - curated therapeutic resources"""
-    try:
-        if os.path.exists(KNOWLEDGE_BASE_FILE):
-            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading knowledge base: {e}")
-    return {"documents": [], "authorized_authors": [], "last_updated": None, "total_documents": 0}
+# ================================
+# PERSISTENT DATABASE SYSTEM
+# ================================
 
-def save_knowledge_base(knowledge_base):
-    """Save ADMIN knowledge base"""
+@contextmanager
+def get_db_connection():
+    """Context manager for database connections with proper cleanup"""
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
     try:
-        knowledge_base["last_updated"] = datetime.now().isoformat()
-        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
-            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
+        yield conn
+    finally:
+        conn.close()
+
+def init_database():
+    """Initialize the persistent database schema"""
+    with get_db_connection() as conn:
+        # Users table for persistent user accounts
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                preferences JSON,
+                therapy_goals TEXT,
+                is_active BOOLEAN DEFAULT 1
+            )
+        ''')
+        
+        # Conversations table for persistent chat history
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                message_type TEXT, -- 'user' or 'assistant'
+                content TEXT,
+                agent_type TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                session_context JSON,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # User documents table for persistent personal documents
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                filename TEXT,
+                content TEXT,
+                file_hash TEXT,
+                character_count INTEGER,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Therapy progress tracking
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS therapy_progress (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                mood_score INTEGER,
+                progress_notes TEXT,
+                therapeutic_insights JSON,
+                goals_updated JSON,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Admin knowledge base metadata
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge_base_docs (
+                id TEXT PRIMARY KEY,
+                filename TEXT,
+                file_hash TEXT,
+                character_count INTEGER,
+                extracted_authors JSON,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                access_count INTEGER DEFAULT 0
+            )
+        ''')
+        
+        conn.commit()
+        print("✅ Database initialized successfully")
+
+# ================================
+# USER MANAGEMENT SYSTEM
+# ================================
+
+def get_or_create_user(session_id=None):
+    """Get existing user or create new persistent user"""
+    if 'user_id' not in session:
+        if session_id:
+            # Try to find existing user by session
+            with get_db_connection() as conn:
+                user = conn.execute(
+                    'SELECT * FROM users WHERE id = ?', (session_id,)
+                ).fetchone()
+                
+                if user:
+                    session['user_id'] = user['id']
+                    # Update last active
+                    conn.execute(
+                        'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                        (user['id'],)
+                    )
+                    conn.commit()
+                    return dict(user)
+        
+        # Create new user
+        user_id = str(uuid.uuid4())
+        session['user_id'] = user_id
+        
+        with get_db_connection() as conn:
+            conn.execute(
+                'INSERT INTO users (id) VALUES (?)', (user_id,)
+            )
+            conn.commit()
+            
+        print(f"✅ Created new persistent user: {user_id}")
+        return {'id': user_id, 'created_at': datetime.now(), 'is_active': True}
+    
+    else:
+        # Get existing user
+        with get_db_connection() as conn:
+            user = conn.execute(
+                'SELECT * FROM users WHERE id = ?', (session['user_id'],)
+            ).fetchone()
+            
+            if user:
+                # Update last active
+                conn.execute(
+                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                    (user['id'],)
+                )
+                conn.commit()
+                return dict(user)
+            else:
+                # User doesn't exist, create new one
+                del session['user_id']
+                return get_or_create_user()
+
+# ================================
+# CONVERSATION PERSISTENCE
+# ================================
+
+def save_conversation_message(user_id, message_type, content, agent_type=None):
+    """Save conversation message to persistent storage"""
+    message_id = str(uuid.uuid4())
+    
+    with get_db_connection() as conn:
+        conn.execute('''
+            INSERT INTO conversations (id, user_id, message_type, content, agent_type)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (message_id, user_id, message_type, content, agent_type))
+        conn.commit()
+    
+    return message_id
+
+def get_user_conversation_history(user_id, limit=50):
+    """Retrieve user's conversation history"""
+    with get_db_connection() as conn:
+        messages = conn.execute('''
+            SELECT * FROM conversations 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        ''', (user_id, limit)).fetchall()
+    
+    return [dict(msg) for msg in reversed(messages)]
+
+def clear_user_conversation(user_id):
+    """Clear user's conversation history"""
+    with get_db_connection() as conn:
+        conn.execute('DELETE FROM conversations WHERE user_id = ?', (user_id,))
+        conn.commit()
+
+# ================================
+# MEMORY-EFFICIENT PDF PROCESSING
+# ================================
+
+def extract_text_from_pdf_efficient(file_path, max_size_mb=100):
+    """Memory-efficient PDF extraction with size limits"""
+    try:
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
+        
+        if file_size > max_size_mb:
+            return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
+        
+        text_content = ""
+        page_count = 0
+        
+        with pdfplumber.open(file_path) as pdf:
+            total_pages = len(pdf.pages)
+            print(f"PDF has {total_pages} pages")
+            
+            for page_num, page in enumerate(pdf.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content += f"\n--- Page {page_num + 1} ---\n"
+                        text_content += page_text.strip() + "\n"
+                        page_count += 1
+                    
+                    # Memory management: collect garbage every 25 pages
+                    if page_num % 25 == 0:
+                        gc.collect()
+                        
+                    # Progress indication for large files
+                    if page_num % 50 == 0 and page_num > 0:
+                        print(f"Processed {page_num}/{total_pages} pages...")
+                        
+                except Exception as e:
+                    print(f"Error extracting page {page_num + 1}: {e}")
+                    continue
+        
+        if not text_content.strip():
+            return f"No text could be extracted from {os.path.basename(file_path)}"
+        
+        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
+        return text_content
+        
     except Exception as e:
-        print(f"Error saving knowledge base: {e}")
+        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg
+    finally:
+        # Force garbage collection
+        gc.collect()
 
 def extract_authors_from_text(text, filename):
     """Extract author names from PDF text and filename"""
@@ -66,70 +282,88 @@ def extract_authors_from_text(text, filename):
     
     # Common author extraction patterns
     author_patterns = [
-        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",  # "by John Smith"
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",  # "John Smith (2020)"
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*-\s*",  # "John Smith - "
+        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[-–—]\s*",
+        r"Author[s]?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
     ]
     
-    # Extract from filename (common format: "AuthorName - Title.pdf")
+    # Extract from filename
     filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
     if filename_match:
         potential_author = filename_match.group(1).strip()
-        if len(potential_author.split()) >= 2:  # At least first + last name
+        if len(potential_author.split()) >= 2:
             authors.add(potential_author.title())
     
-    # Extract from text content
+    # Extract from text content (first 3000 chars for efficiency)
+    search_text = text[:3000] if len(text) > 3000 else text
     for pattern in author_patterns:
-        matches = re.findall(pattern, text[:2000])  # Search first 2000 chars
+        matches = re.findall(pattern, search_text)
         for match in matches:
-            if len(match.split()) >= 2:  # At least first + last name
+            if len(match.split()) >= 2:
                 authors.add(match.strip())
     
     return list(authors)
 
-def extract_text_from_pdf(file_path):
-    """Extract text from PDF using pdfplumber - better quality extraction"""
+# ================================
+# KNOWLEDGE BASE SYSTEM
+# ================================
+
+def load_knowledge_base():
+    """Load admin knowledge base with fallback"""
     try:
-        print(f"Extracting text from PDF: {file_path}")
-        text_content = ""
-        
-        with pdfplumber.open(file_path) as pdf:
-            print(f"PDF has {len(pdf.pages)} pages")
-            
-            for page_num, page in enumerate(pdf.pages):
-                try:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_content += f"\n--- Page {page_num + 1} ---\n"
-                        text_content += page_text + "\n"
-                except Exception as e:
-                    print(f"Error extracting page {page_num + 1}: {e}")
-                    continue
-        
-        if not text_content.strip():
-            return f"No text content could be extracted from {os.path.basename(file_path)}. The PDF may contain only images or be password protected."
-        
-        print(f"Successfully extracted {len(text_content)} characters from {os.path.basename(file_path)}")
-        return text_content
-        
+        if os.path.exists(KNOWLEDGE_BASE_FILE):
+            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
     except Exception as e:
-        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
-        print(error_msg)
-        return f"PDF extraction failed for {os.path.basename(file_path)}. Error: {str(e)}"
+        print(f"Error loading knowledge base: {e}")
+    
+    return {
+        "documents": [],
+        "authorized_authors": [],
+        "last_updated": None,
+        "total_documents": 0,
+        "total_characters": 0
+    }
+
+def save_knowledge_base(knowledge_base):
+    """Save admin knowledge base with metadata"""
+    try:
+        knowledge_base["last_updated"] = datetime.now().isoformat()
+        knowledge_base["total_documents"] = len(knowledge_base["documents"])
+        knowledge_base["total_characters"] = sum(
+            len(doc.get("content", "")) for doc in knowledge_base["documents"]
+        )
+        
+        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
+            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
+            
+        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
+    except Exception as e:
+        print(f"❌ Error saving knowledge base: {e}")
 
 def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to ADMIN knowledge base and extract authors"""
+    """Add document to admin knowledge base with database tracking"""
     try:
-        text_content = extract_text_from_pdf(file_path)
+        # Extract text efficiently
+        text_content = extract_text_from_pdf_efficient(file_path)
         
-        # Extract authors from the document
+        if "Error" in text_content or "too large" in text_content:
+            return {"error": text_content}
+        
+        # Extract authors
         extracted_authors = extract_authors_from_text(text_content, filename)
         
+        # Create document info
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+        doc_id = str(uuid.uuid4())
+        
         doc_info = {
+            "id": doc_id,
             "filename": filename,
             "content": text_content,
             "added_date": datetime.now().isoformat(),
-            "file_hash": hashlib.md5(open(file_path, 'rb').read()).hexdigest(),
+            "file_hash": file_hash,
             "is_core": is_core,
             "character_count": len(text_content),
             "type": "admin_therapeutic_resource",
@@ -137,160 +371,178 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
             "pdf_extraction_status": "success"
         }
         
-        # Add to global knowledge base
+        # Add to knowledge base
+        knowledge_base = load_knowledge_base()
         knowledge_base["documents"].append(doc_info)
         
-        # Update authorized authors list
+        # Update authorized authors
         if "authorized_authors" not in knowledge_base:
             knowledge_base["authorized_authors"] = []
         
         for author in extracted_authors:
             if author not in knowledge_base["authorized_authors"]:
                 knowledge_base["authorized_authors"].append(author)
-                print(f"Added authorized author: {author}")
+                print(f"✅ Added authorized author: {author}")
         
-        knowledge_base["total_documents"] = len(knowledge_base["documents"])
         save_knowledge_base(knowledge_base)
-        print(f"Added {filename} to knowledge base ({len(text_content)} characters)")
-        print(f"Extracted authors: {extracted_authors}")
         
+        # Track in database
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO knowledge_base_docs 
+                (id, filename, file_hash, character_count, extracted_authors)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
+            conn.commit()
+        
+        print(f"✅ Added {filename} to knowledge base ({len(text_content)} characters)")
         return doc_info
+        
     except Exception as e:
-        print(f"Error adding document to knowledge base: {e}")
-        return None
+        error_msg = f"Error adding document: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+    finally:
+        gc.collect()
 
-def search_authorized_author_content(query, author_name):
-    """Search for content from authorized authors only"""
+# ================================
+# USER DOCUMENT PERSISTENCE
+# ================================
+
+def add_personal_document_persistent(file_path, filename, user_id):
+    """Add document to user's persistent personal collection"""
     try:
-        print(f"Searching for content by authorized author: {author_name}")
+        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=50)
         
-        # This is where you'd implement web search restricted to specific authors
-        # For now, we'll return a placeholder
-        search_query = f'"{author_name}" {query} therapeutic therapy systemic'
+        if "Error" in text_content or "too large" in text_content:
+            return {"error": text_content}
         
-        # TODO: Implement controlled web search
-        # Could use Google Scholar API, academic databases, or author-specific sites
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+        doc_id = str(uuid.uuid4())
         
-        return f"[Controlled search for '{query}' by authorized author {author_name} would be implemented here]"
+        # Save to database
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO user_documents 
+                (id, user_id, filename, content, file_hash, character_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (doc_id, user_id, filename, text_content, file_hash, len(text_content)))
+            conn.commit()
+        
+        doc_info = {
+            "id": doc_id,
+            "filename": filename,
+            "content": text_content,
+            "file_hash": file_hash,
+            "character_count": len(text_content),
+            "upload_date": datetime.now().isoformat(),
+            "type": "user_personal_document"
+        }
+        
+        print(f"✅ Added {filename} to user {user_id} ({len(text_content)} characters)")
+        return doc_info
         
     except Exception as e:
-        print(f"Error searching authorized author content: {e}")
-        return None
+        error_msg = f"Error adding personal document: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+    finally:
+        gc.collect()
 
-def check_knowledge_gaps(user_query):
-    """Check if query can be answered from knowledge base, or needs authorized author search"""
-    # Simple keyword matching to determine if we have relevant content
-    query_lower = user_query.lower()
+def get_user_documents(user_id):
+    """Get user's persistent personal documents"""
+    with get_db_connection() as conn:
+        docs = conn.execute('''
+            SELECT * FROM user_documents 
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY upload_date DESC
+        ''', (user_id,)).fetchall()
     
-    # Search through knowledge base content
-    relevant_docs = []
-    for doc in knowledge_base["documents"]:
-        doc_content_lower = doc["content"].lower()
-        
-        # Simple relevance scoring
-        relevance_score = 0
-        query_words = query_lower.split()
-        
-        for word in query_words:
-            if len(word) > 3:  # Skip short words
-                relevance_score += doc_content_lower.count(word)
-        
-        if relevance_score > 0:
-            relevant_docs.append((doc, relevance_score))
-    
-    # Sort by relevance
-    relevant_docs.sort(key=lambda x: x[1], reverse=True)
-    
-    # If we have good coverage, use knowledge base only
-    if relevant_docs and relevant_docs[0][1] > 5:
-        return "knowledge_base_sufficient", relevant_docs[:3]
-    
-    # If coverage is poor, suggest authorized author search
-    return "needs_authorized_search", relevant_docs
+    return [dict(doc) for doc in docs]
 
-def build_controlled_context(session_id, user_query):
-    """Build context ONLY from curated knowledge base + user docs"""
+def clear_user_documents(user_id):
+    """Clear user's personal documents"""
+    with get_db_connection() as conn:
+        result = conn.execute(
+            'UPDATE user_documents SET is_active = 0 WHERE user_id = ?', (user_id,)
+        )
+        conn.commit()
+        return result.rowcount
+
+# ================================
+# INTELLIGENT CONTEXT BUILDING
+# ================================
+
+def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
+    """Build intelligent context from knowledge base + user history + personal docs"""
     context = ""
     
-    # 1. Check knowledge gaps
-    gap_status, relevant_docs = check_knowledge_gaps(user_query)
+    # 1. Get user's conversation history for continuity
+    conversation_history = get_user_conversation_history(user_id, limit=10)
+    if conversation_history:
+        context += "\n=== CONVERSATION CONTINUITY ===\n"
+        context += "Previous conversation context (for therapeutic continuity):\n"
+        for msg in conversation_history[-5:]:  # Last 5 messages
+            role = "User" if msg['message_type'] == 'user' else "Therapist"
+            context += f"{role}: {msg['content'][:200]}...\n"
     
-    # 2. ADMIN KNOWLEDGE BASE - Your curated content ONLY
+    # 2. Search knowledge base for relevant content
+    knowledge_base = load_knowledge_base()
+    relevant_docs = []
+    
+    if knowledge_base["documents"]:
+        query_words = user_query.lower().split()
+        
+        for doc in knowledge_base["documents"]:
+            relevance_score = 0
+            doc_content_lower = doc["content"].lower()
+            
+            for word in query_words:
+                if len(word) > 3:
+                    relevance_score += doc_content_lower.count(word)
+            
+            if relevance_score > 0:
+                relevant_docs.append((doc, relevance_score))
+        
+        # Sort by relevance and take top docs
+        relevant_docs.sort(key=lambda x: x[1], reverse=True)
+        relevant_docs = relevant_docs[:limit_kb_docs]
+    
+    # Add knowledge base content
     if relevant_docs:
         context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
         for doc, score in relevant_docs:
             context += f"From '{doc['filename']}':\n{doc['content'][:2000]}...\n\n"
-    else:
-        context += "\n=== AVAILABLE KNOWLEDGE ===\n"
-        # If no specific relevance, use recent uploads
-        for doc in knowledge_base["documents"][-3:]:
-            context += f"From '{doc['filename']}':\n{doc['content'][:1500]}...\n\n"
+            
+            # Track access in database
+            with get_db_connection() as conn:
+                conn.execute('''
+                    UPDATE knowledge_base_docs 
+                    SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
+                    WHERE id = ?
+                ''', (doc.get('id', ''),))
+                conn.commit()
     
-    # 3. USER'S PERSONAL DOCUMENTS
-    user_session = get_user_session(session_id)
-    if user_session["personal_documents"]:
+    # 3. Add user's personal documents
+    user_docs = get_user_documents(user_id)
+    if user_docs:
         context += "\n=== USER'S PERSONAL CONTEXT ===\n"
-        for doc in user_session["personal_documents"]:
+        for doc in user_docs[:3]:  # Limit to recent docs
             context += f"From your document '{doc['filename']}':\n{doc['content'][:1000]}...\n\n"
     
-    # 4. AUTHORIZED AUTHORS INFO
+    # 4. Add authorized authors
     if knowledge_base.get("authorized_authors"):
         context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
-        context += f"You may reference these authorized authors: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
-        
-        if gap_status == "needs_authorized_search":
-            context += "\nNOTE: If the curated knowledge base doesn't fully address this query, you may mention that additional insights could be found from the authorized authors listed above.\n"
+        context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
     
-    return context[:10000], gap_status
+    return context[:15000]  # Limit total context size
 
-knowledge_base = load_knowledge_base()
+# ================================
+# API FUNCTIONS (UNCHANGED)
+# ================================
 
-def is_admin_user():
-    return session.get("is_admin", False)
-
-def add_personal_document_to_session(file_path, filename, session_id):
-    """Add document to USER's personal session"""
-    try:
-        text_content = extract_text_from_pdf(file_path)
-        
-        doc_info = {
-            "filename": filename,
-            "content": text_content,
-            "added_date": datetime.now().isoformat(),
-            "file_hash": hashlib.md5(open(file_path, 'rb').read()).hexdigest(),
-            "character_count": len(text_content),
-            "type": "user_personal_document",
-            "session_id": session_id,
-            "pdf_extraction_status": "success"
-        }
-        
-        user_session = get_user_session(session_id)
-        user_session["personal_documents"].append(doc_info)
-        print(f"Added {filename} to user session {session_id} ({len(text_content)} characters)")
-        
-        return doc_info
-    except Exception as e:
-        print(f"Error adding personal document: {e}")
-        return None
-
-def get_session_id():
-    if 'session_id' not in session:
-        session['session_id'] = hashlib.md5(str(datetime.now()).encode()).hexdigest()[:16]
-    return session['session_id']
-
-def get_user_session(session_id):
-    if session_id not in user_sessions:
-        user_sessions[session_id] = {
-            "chat_history": [],
-            "personal_documents": [],
-            "created": datetime.now().isoformat()
-        }
-    return user_sessions[session_id]
-
-# Direct API calls (unchanged)
 def call_claude_direct(system_prompt, user_message):
     try:
-        print("Calling Claude API directly")
         headers = {
             "Content-Type": "application/json",
             "x-api-key": claude_api_key,
@@ -301,9 +553,7 @@ def call_claude_direct(system_prompt, user_message):
             "model": "claude-3-haiku-20240307",
             "max_tokens": 1024,
             "system": system_prompt,
-            "messages": [
-                {"role": "user", "content": user_message}
-            ]
+            "messages": [{"role": "user", "content": user_message}]
         }
         
         response = requests.post(
@@ -317,16 +567,15 @@ def call_claude_direct(system_prompt, user_message):
             result = response.json()
             return result["content"][0]["text"]
         else:
-            print(f"Claude API error: {response.status_code} - {response.text}")
+            print(f"Claude API error: {response.status_code}")
             return f"Error calling Claude API: {response.status_code}"
             
     except Exception as e:
-        print(f"Error in direct Claude call: {e}")
+        print(f"Error in Claude call: {e}")
         return f"Error: {str(e)}"
 
 def call_openai_direct(system_prompt, user_message):
     try:
-        print("Calling OpenAI API directly")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {openai_api_key}"
@@ -352,44 +601,55 @@ def call_openai_direct(system_prompt, user_message):
             result = response.json()
             return result["choices"][0]["message"]["content"]
         else:
-            print(f"OpenAI API error: {response.status_code} - {response.text}")
+            print(f"OpenAI API error: {response.status_code}")
             return f"Error calling OpenAI API: {response.status_code}"
             
     except Exception as e:
-        print(f"Error in direct OpenAI call: {e}")
+        print(f"Error in OpenAI call: {e}")
         return f"Error: {str(e)}"
 
-def call_model(model, system, prompt, session_id):
+def call_model_with_context(model, system, prompt, user_id):
+    """Enhanced model calling with persistent context"""
     try:
-        # Build controlled context (NO random internet content)
-        controlled_context, gap_status = build_controlled_context(session_id, prompt)
+        # Build intelligent context
+        context = build_therapeutic_context(user_id, prompt)
         
-        if controlled_context:
-            system += f"\n\nIMPORTANT - CONTROLLED KNOWLEDGE SYSTEM:\n"
-            system += f"You MUST work exclusively within the curated knowledge provided below. "
-            system += f"Do NOT use general internet knowledge. ONLY use the curated therapeutic content and authorized authors listed.\n"
-            system += f"If information is not in the curated knowledge base, you may mention that additional insights might be available from the authorized authors listed.\n\n"
-            system += controlled_context
+        if context:
+            system += f"\n\nTHERAPEUTIC CONTEXT SYSTEM:\n"
+            system += f"You have access to this user's therapeutic history and curated knowledge. "
+            system += f"Provide continuity and reference previous conversations when appropriate.\n\n"
+            system += context
         
+        # Call appropriate model
         if "gpt" in model:
-            print(f"Using OpenAI via direct API: {model}")
             if not openai_api_key:
                 return "Error: OpenAI API key not configured"
             return call_openai_direct(system, prompt)
         else:
-            print(f"Using Claude via direct API: {model}")
             if not claude_api_key:
                 return "Error: Claude API key not configured"
             return call_claude_direct(system, prompt)
+            
     except Exception as e:
         print(f"Error calling model: {e}")
         return f"Error: {str(e)}"
 
+# ================================
+# ADMIN FUNCTIONS
+# ================================
+
+def is_admin_user():
+    return session.get("is_admin", False)
+
+# ================================
+# FLASK ROUTES
+# ================================
+
 @app.route("/", methods=["GET"])
 def index():
-    session_id = get_session_id()
+    user = get_or_create_user()
     is_admin = is_admin_user()
-    return render_template("index.html", is_admin=is_admin)
+    return render_template("index.html", is_admin=is_admin, user_id=user['id'])
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
@@ -404,6 +664,7 @@ def admin():
     if not session.get("is_admin"):
         return render_template("admin_login.html")
     
+    knowledge_base = load_knowledge_base()
     return render_template("admin_dashboard.html", 
                          knowledge_base=knowledge_base,
                          total_docs=len(knowledge_base["documents"]),
@@ -412,37 +673,39 @@ def admin():
 @app.route("/chat", methods=["POST"])
 def chat():
     try:
-        session_id = get_session_id()
-        user_session = get_user_session(session_id)
+        user = get_or_create_user()
+        user_id = user['id']
         
         data = request.get_json()
         user_input = data.get("user_input", "")
         agent = data.get("agent", "")
 
-        print(f"Chat request - User: {user_input}, Agent: {agent}, Session: {session_id}")
+        print(f"Chat request - User: {user_id}, Input: {user_input[:100]}..., Agent: {agent}")
 
-        user_session["chat_history"].append({"role": "user", "content": user_input})
+        # Save user message
+        save_conversation_message(user_id, "user", user_input)
 
-        # Enhanced system prompts with controlled knowledge instruction
-        base_instruction = "CRITICAL: You must work EXCLUSIVELY within the curated therapeutic knowledge base provided. Do not use general internet knowledge or training data. Only reference the curated content and authorized authors."
+        # Build system prompt based on agent
+        base_instruction = "You are a professional therapeutic AI with access to curated knowledge and conversation history. Provide continuity and reference previous conversations when appropriate."
 
-        if agent == "case_assistant":
-            system_prompt = f"{base_instruction} You assist with social work case analysis using only the curated knowledge base and user's personal documents."
-            model = config["claude_model"]
-        elif agent == "research_critic":
-            system_prompt = f"{base_instruction} You critically evaluate research using only the curated therapeutic knowledge and authorized authors."
-            model = config["openai_model"]
-        elif agent == "therapy_planner":
-            system_prompt = f"{base_instruction} You plan therapeutic interventions using only the curated knowledge base and authorized therapeutic approaches."
-            model = config["openai_model"]
-        else:
-            system_prompt = f"{base_instruction} {config['claude_system_prompt']} Use only the curated therapeutic knowledge provided."
-            model = config["claude_model"]
+        agent_prompts = {
+            "case_assistant": f"{base_instruction} You assist with social work case analysis.",
+            "research_critic": f"{base_instruction} You critically evaluate research using evidence-based approaches.",
+            "therapy_planner": f"{base_instruction} You plan therapeutic interventions using proven methodologies.",
+            "therapist": f"{base_instruction} {config.get('claude_system_prompt', 'You provide therapeutic support.')}"
+        }
 
-        response_text = call_model(model, system_prompt, user_input, session_id)
-        user_session["chat_history"].append({"role": "assistant", "content": response_text})
+        system_prompt = agent_prompts.get(agent, agent_prompts["therapist"])
+        model = config.get("claude_model", "claude-3-haiku-20240307")
 
-        return jsonify({"response": response_text})
+        # Get AI response with full context
+        response_text = call_model_with_context(model, system_prompt, user_input, user_id)
+        
+        # Save AI response
+        save_conversation_message(user_id, "assistant", response_text, agent)
+
+        return jsonify({"response": response_text, "user_id": user_id})
+        
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
         return jsonify({"error": str(e)}), 500
@@ -450,7 +713,8 @@ def chat():
 @app.route("/upload", methods=["POST"])
 def upload():
     try:
-        session_id = get_session_id()
+        user = get_or_create_user()
+        user_id = user['id']
         
         if "pdf" not in request.files:
             return jsonify({"message": "No file selected", "success": False})
@@ -467,55 +731,53 @@ def upload():
         if upload_type == "admin":
             if not is_admin_user():
                 return jsonify({
-                    "message": "Access denied. Only administrators can upload to the global knowledge base.", 
+                    "message": "Access denied. Admin privileges required.", 
                     "success": False
                 }), 403
             
+            # Admin upload to global knowledge base
             file_path = os.path.join(UPLOADS_DIR, file.filename)
             file.save(file_path)
+            
             doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
             
-            if doc_info:
-                authors_text = f" | Authors detected: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
-                return jsonify({
-                    "message": f"Successfully extracted and added '{file.filename}' to controlled knowledge base ({doc_info['character_count']} characters){authors_text}", 
-                    "success": True,
-                    "type": "admin",
-                    "extracted_authors": doc_info['extracted_authors']
-                })
-        else:
-            file_path = os.path.join(USER_UPLOADS_DIR, f"{session_id}_{file.filename}")
-            file.save(file_path)
-            doc_info = add_personal_document_to_session(file_path, file.filename, session_id)
+            if "error" in doc_info:
+                return jsonify({"message": doc_info["error"], "success": False})
             
-            if doc_info:
-                return jsonify({
-                    "message": f"Successfully extracted and added '{file.filename}' to your personal session ({doc_info['character_count']} characters)", 
-                    "success": True,
-                    "type": "personal"
-                })
-        
-        return jsonify({"message": "Upload processing failed", "success": False})
+            authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
+            return jsonify({
+                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){authors_text}", 
+                "success": True,
+                "type": "admin",
+                "extracted_authors": doc_info['extracted_authors']
+            })
+        else:
+            # User personal document
+            file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
+            file.save(file_path)
+            
+            doc_info = add_personal_document_persistent(file_path, file.filename, user_id)
+            
+            if "error" in doc_info:
+                return jsonify({"message": doc_info["error"], "success": False})
+            
+            return jsonify({
+                "message": f"✅ Added '{file.filename}' to your persistent documents ({doc_info['character_count']} characters)", 
+                "success": True,
+                "type": "personal"
+            })
         
     except Exception as e:
         print(f"Error in upload endpoint: {e}")
         return jsonify({"error": str(e), "success": False})
 
-@app.route("/authorized-authors", methods=["GET"])
-def get_authorized_authors():
-    """Get list of authorized authors"""
-    return jsonify({
-        "authorized_authors": knowledge_base.get("authorized_authors", []),
-        "total_authors": len(knowledge_base.get("authorized_authors", []))
-    })
-
 @app.route("/clear", methods=["POST"])
 def clear():
     try:
-        session_id = get_session_id()
-        user_session = get_user_session(session_id)
-        user_session["chat_history"] = []
-        return jsonify({"message": "Chat history cleared (personal documents retained)"})
+        user = get_or_create_user()
+        user_id = user['id']
+        clear_user_conversation(user_id)
+        return jsonify({"message": "Chat history cleared (documents and progress retained)"})
     except Exception as e:
         print(f"Error in clear endpoint: {e}")
         return jsonify({"error": str(e)}), 500
@@ -523,80 +785,289 @@ def clear():
 @app.route("/clear-documents", methods=["POST"])
 def clear_documents():
     try:
-        session_id = get_session_id()
-        user_session = get_user_session(session_id)
-        cleared_count = len(user_session["personal_documents"])
-        user_session["personal_documents"] = []
+        user = get_or_create_user()
+        user_id = user['id']
+        cleared_count = clear_user_documents(user_id)
         return jsonify({"message": f"Cleared {cleared_count} personal documents"})
     except Exception as e:
         print(f"Error in clear documents endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/log", methods=["GET"])
-def get_log():
-    session_id = get_session_id()
-    user_session = get_user_session(session_id)
-    return jsonify(user_session["chat_history"])
+@app.route("/conversation-history", methods=["GET"])
+def get_conversation_history():
+    """Get user's persistent conversation history"""
+    try:
+        user = get_or_create_user()
+        user_id = user['id']
+        history = get_user_conversation_history(user_id, limit=100)
+        return jsonify({"conversation_history": history, "user_id": user_id})
+    except Exception as e:
+        print(f"Error in conversation history endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/personal-documents", methods=["GET"])
 def get_personal_documents():
-    session_id = get_session_id()
-    user_session = get_user_session(session_id)
-    return jsonify({
-        "personal_documents": [
+    """Get user's persistent personal documents"""
+    try:
+        user = get_or_create_user()
+        user_id = user['id']
+        docs = get_user_documents(user_id)
+        
+        # Return summary info (not full content for performance)
+        doc_summaries = [
             {
+                "id": doc["id"],
                 "filename": doc["filename"],
-                "added_date": doc["added_date"],
+                "upload_date": doc["upload_date"],
                 "character_count": doc["character_count"]
             }
-            for doc in user_session["personal_documents"]
+            for doc in docs
         ]
-    })
+        
+        return jsonify({"personal_documents": doc_summaries, "user_id": user_id})
+    except Exception as e:
+        print(f"Error in personal documents endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/knowledge-base", methods=["GET"])
 def get_knowledge_base():
-    return jsonify({
-        "total_documents": len(knowledge_base["documents"]),
-        "last_updated": knowledge_base.get("last_updated"),
-        "authorized_authors": knowledge_base.get("authorized_authors", []),
-        "total_authors": len(knowledge_base.get("authorized_authors", [])),
-        "documents": [{"filename": doc["filename"], "added_date": doc["added_date"], "character_count": doc.get("character_count", 0)} 
-                     for doc in knowledge_base["documents"]]
-    })
+    """Get knowledge base status"""
+    try:
+        knowledge_base = load_knowledge_base()
+        
+        # Get database stats
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            active_users = conn.execute(
+                'SELECT COUNT(*) as count FROM users WHERE last_active > datetime("now", "-30 days")'
+            ).fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+        
+        return jsonify({
+            "total_documents": len(knowledge_base["documents"]),
+            "total_characters": knowledge_base.get("total_characters", 0),
+            "last_updated": knowledge_base.get("last_updated"),
+            "authorized_authors": knowledge_base.get("authorized_authors", []),
+            "total_authors": len(knowledge_base.get("authorized_authors", [])),
+            "system_stats": {
+                "total_users": total_users,
+                "active_users_30d": active_users,
+                "total_conversations": total_conversations
+            }
+        })
+    except Exception as e:
+        print(f"Error in knowledge base endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/user-stats", methods=["GET"])
+def get_user_stats():
+    """Get current user's statistics"""
+    try:
+        user = get_or_create_user()
+        user_id = user['id']
+        
+        with get_db_connection() as conn:
+            conversation_count = conn.execute(
+                'SELECT COUNT(*) as count FROM conversations WHERE user_id = ?', (user_id,)
+            ).fetchone()['count']
+            
+            document_count = conn.execute(
+                'SELECT COUNT(*) as count FROM user_documents WHERE user_id = ? AND is_active = 1', (user_id,)
+            ).fetchone()['count']
+            
+            days_active = conn.execute('''
+                SELECT CAST((julianday('now') - julianday(created_at)) AS INTEGER) as days
+                FROM users WHERE id = ?
+            ''', (user_id,)).fetchone()['days']
+        
+        return jsonify({
+            "user_id": user_id,
+            "conversation_messages": conversation_count,
+            "personal_documents": document_count,
+            "days_active": days_active,
+            "created_at": user['created_at'],
+            "last_active": user['last_active']
+        })
+    except Exception as e:
+        print(f"Error in user stats endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/log", methods=["GET"])
+def get_log():
+    """Download user's conversation history"""
+    try:
+        user = get_or_create_user()
+        user_id = user['id']
+        
+        # Get full conversation history
+        history = get_user_conversation_history(user_id, limit=1000)
+        
+        # Get user documents
+        docs = get_user_documents(user_id)
+        
+        # Format for download
+        export_data = {
+            "user_id": user_id,
+            "export_date": datetime.now().isoformat(),
+            "conversation_history": history,
+            "personal_documents": [
+                {
+                    "filename": doc["filename"],
+                    "upload_date": doc["upload_date"],
+                    "character_count": doc["character_count"]
+                }
+                for doc in docs
+            ],
+            "stats": {
+                "total_messages": len(history),
+                "total_documents": len(docs)
+            }
+        }
+        
+        return jsonify(export_data)
+    except Exception as e:
+        print(f"Error in log endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/health")
 def health():
-    openai_works = False
-    claude_works = False
+    """System health check with memory usage"""
+    try:
+        # Test API connections
+        openai_works = False
+        claude_works = False
+        
+        if openai_api_key:
+            try:
+                test_response = call_openai_direct("You are a test.", "Hello")
+                openai_works = not test_response.startswith("Error")
+            except:
+                pass
+        
+        if claude_api_key:
+            try:
+                test_response = call_claude_direct("You are a test.", "Hello")
+                claude_works = not test_response.startswith("Error")
+            except:
+                pass
+        
+        # Database stats
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            total_user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
+        
+        knowledge_base = load_knowledge_base()
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "apis": {
+                "openai_configured": openai_api_key is not None,
+                "openai_working": openai_works,
+                "claude_configured": claude_api_key is not None,
+                "claude_working": claude_works
+            },
+            "database": {
+                "total_users": total_users,
+                "total_conversations": total_conversations,
+                "total_user_documents": total_user_docs,
+                "knowledge_base_documents": len(knowledge_base["documents"]),
+                "authorized_authors": len(knowledge_base.get("authorized_authors", []))
+            },
+            "features": {
+                "persistent_memory": True,
+                "conversation_continuity": True,
+                "personal_documents": True,
+                "knowledge_base": True,
+                "pdf_extraction": "pdfplumber",
+                "controlled_knowledge": True
+            },
+            "memory_info": {
+                "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
+                "database_file": DATABASE_FILE,
+                "pdf_max_size_mb": 100
+            }
+        })
+    except Exception as e:
+        print(f"Error in health endpoint: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+# ================================
+# DATABASE MAINTENANCE
+# ================================
+
+@app.route("/admin/cleanup", methods=["POST"])
+def admin_cleanup():
+    """Admin endpoint for database maintenance"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
     
-    if openai_api_key:
-        try:
-            test_response = call_openai_direct("You are a test assistant.", "Hello")
-            openai_works = not test_response.startswith("Error")
-        except:
-            openai_works = False
+    try:
+        days_old = int(request.json.get("days_old", 90))
+        
+        with get_db_connection() as conn:
+            # Clean old inactive users
+            old_users = conn.execute('''
+                DELETE FROM users 
+                WHERE last_active < datetime('now', '-{} days') 
+                AND id NOT IN (SELECT DISTINCT user_id FROM conversations WHERE timestamp > datetime('now', '-30 days'))
+            '''.format(days_old))
+            
+            # Clean orphaned conversations
+            orphaned_convs = conn.execute('''
+                DELETE FROM conversations 
+                WHERE user_id NOT IN (SELECT id FROM users)
+            ''')
+            
+            # Clean orphaned documents
+            orphaned_docs = conn.execute('''
+                DELETE FROM user_documents 
+                WHERE user_id NOT IN (SELECT id FROM users)
+            ''')
+            
+            conn.commit()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        return jsonify({
+            "message": "Database cleanup completed",
+            "removed": {
+                "old_users": old_users.rowcount,
+                "orphaned_conversations": orphaned_convs.rowcount,
+                "orphaned_documents": orphaned_docs.rowcount
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ================================
+# INITIALIZATION AND STARTUP
+# ================================
+
+def initialize_system():
+    """Initialize the therapeutic AI system"""
+    print("🚀 Initializing Therapeutic AI with Persistent Memory...")
     
-    if claude_api_key:
-        try:
-            test_response = call_claude_direct("You are a test assistant.", "Hello")
-            claude_works = not test_response.startswith("Error")
-        except:
-            claude_works = False
+    # Initialize database
+    init_database()
     
-    return jsonify({
-        "status": "healthy",
-        "openai_configured": openai_api_key is not None,
-        "openai_client_works": openai_works,
-        "claude_configured": claude_api_key is not None,
-        "claude_client_works": claude_works,
-        "knowledge_base_documents": len(knowledge_base["documents"]),
-        "authorized_authors": len(knowledge_base.get("authorized_authors", [])),
-        "controlled_knowledge_system": True,
-        "pdf_support": "pdfplumber_active",
-        "note": "Controlled knowledge system with pdfplumber PDF extraction"
-    })
+    # Load knowledge base
+    knowledge_base = load_knowledge_base()
+    print(f"📚 Knowledge base loaded: {len(knowledge_base['documents'])} documents")
+    
+    # Check database health
+    with get_db_connection() as conn:
+        total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+        total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+        print(f"👥 Database: {total_users} users, {total_conversations} conversations")
+    
+    print("✅ Therapeutic AI system initialized successfully!")
 
 if __name__ == "__main__":
+    initialize_system()
     app.run(host="0.0.0.0", port=5000, debug=True)
 else:
+    initialize_system()
     application = app
