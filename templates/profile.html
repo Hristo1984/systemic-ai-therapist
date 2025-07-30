@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Profile - Systemic AI Co-Therapist</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e8ecf0 100%);
+            min-height: 100vh;
+            color: #2c3e50;
+        }
+        
+        .header {
+            background: white;
+            padding: 16px 24px;
+            border-bottom: 1px solid #e8ecf0;
+            box-shadow: 0 2px 8px rgba(44, 62, 80, 0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #4A90B8, #5DADE2);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 16px;
+        }
+        
+        .brand-text h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        
+        .nav-link {
+            color: #4A90B8;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-link:hover {
+            background: rgba(74, 144, 184, 0.1);
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+        
+        .profile-header {
+            background: white;
+            padding: 32px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        
+        .profile-avatar {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #4A90B8, #7FB069);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 32px;
+            font-weight: 600;
+            margin: 0 auto 16px;
+        }
+        
+        .profile-name {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+        
+        .profile-username {
+            color: #90a4ae;
+            margin-bottom: 16px;
+        }
+        
+        .profile-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 24px;
+            margin-top: 24px;
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 24px;
+            font-weight: 600;
+            color: #4A90B8;
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #90a4ae;
+            margin-top: 4px;
+        }
+        
+        .profile-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        
+        .profile-card {
+            background: white;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+        }
+        
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #2c3e50;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #546e7a;
+        }
+        
+        input[type="text"],
+        input[type="email"],
+        textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e8ecf0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            transition: all 0.3s ease;
+            outline: none;
+            font-family: inherit;
+        }
+        
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        textarea:focus {
+            border-color: #4A90B8;
+            box-shadow: 0 0 0 3px rgba(74, 144, 184, 0.15);
+        }
+        
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: none;
+            font-size: 14px;
+        }
+        
+        .btn-primary {
+            background: #4A90B8;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #3a7ba8;
+            transform: translateY(-1px);
+        }
+        
+        .btn-secondary {
+            background: #e8ecf0;
+            color: #546e7a;
+        }
+        
+        .btn-secondary:hover {
+            background: #d4e6f1;
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        
+        .alert-success {
+            background: rgba(76, 175, 80, 0.1);
+            color: #4caf50;
+            border: 1px solid rgba(76, 175, 80, 0.2);
+        }
+        
+        .alert-error {
+            background: rgba(244, 67, 54, 0.1);
+            color: #f44336;
+            border: 1px solid rgba(244, 67, 54, 0.2);
+        }
+        
+        .therapy-goals {
+            background: rgba(127, 176, 105, 0.1);
+            border: 1px solid rgba(127, 176, 105, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 12px;
+        }
+        
+        .join-date {
+            color: #90a4ae;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+        
+        @media (max-width: 768px) {
+            .profile-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .profile-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .container {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="brand">
+            <div class="brand-icon">👤</div>
+            <div class="brand-text">
+                <h1>My Profile</h1>
+            </div>
+        </div>
+        <nav class="nav-links">
+            <a href="/" class="nav-link">← Back to Chat</a>
+            <a href="/logout" class="nav-link">Logout</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="profile-header">
+            <div class="profile-avatar">
+                {{ user.full_name[0].upper() if user.full_name else user.username[0].upper() }}
+            </div>
+            <h2 class="profile-name">{{ user.full_name or user.username }}</h2>
+            <p class="profile-username">@{{ user.username }}</p>
+            
+            <div class="profile-stats">
+                <div class="stat-item">
+                    <span class="stat-number">{{ stats.total_conversations or 0 }}</span>
+                    <div class="stat-label">Conversations</div>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ stats.total_documents or 0 }}</span>
+                    <div class="stat-label">Documents</div>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ user.total_sessions or 0 }}</span>
+                    <div class="stat-label">Sessions</div>
+                </div>
+            </div>
+            
+            <div class="join-date">
+                Member since {{ user.created_at.strftime('%B %Y') if user.created_at else 'Recently' }}
+            </div>
+        </div>
+
+        <div class="profile-content">
+            <div class="profile-card">
+                <h3 class="card-title">
+                    ✏️ Edit Profile
+                </h3>
+                
+                <div id="profileAlert" class="alert" style="display: none;"></div>
+                
+                <form id="profileForm">
+                    <div class="form-group">
+                        <label for="full_name">Full Name:</label>
+                        <input type="text" id="full_name" name="full_name" 
+                               value="{{ user.full_name or '' }}" 
+                               placeholder="Enter your full name">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="email">Email Address:</label>
+                        <input type="email" id="email" name="email" 
+                               value="{{ user.email }}" 
+                               readonly style="background: #f8f9fa; color: #90a4ae;">
+                        <small style="color: #90a4ae; font-size: 12px;">Email cannot be changed</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="therapy_goals">Therapy Goals:</label>
+                        <textarea id="therapy_goals" name="therapy_goals" 
+                                  placeholder="What would you like to work on in therapy? (optional)">{{ user.therapy_goals or '' }}</textarea>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">
+                        Save Changes
+                    </button>
+                </form>
+            </div>
+
+            <div class="profile-card">
+                <h3 class="card-title">
+                    🎯 Your Therapeutic Journey
+                </h3>
+                
+                {% if user.therapy_goals %}
+                <div class="therapy-goals">
+                    <strong>Current Goals:</strong>
+                    <p style="margin-top: 8px;">{{ user.therapy_goals }}</p>
+                </div>
+                {% else %}
+                <p style="color: #90a4ae; font-style: italic;">
+                    Add your therapy goals to help personalize your experience.
+                </p>
+                {% endif %}
+                
+                <div style="margin-top: 24px;">
+                    <h4 style="margin-bottom: 12px; color: #546e7a;">Recent Activity</h4>
+                    {% if stats.last_session %}
+                    <p style="color: #90a4ae; font-size: 14px;">
+                        Last session: {{ stats.last_session.strftime('%B %d, %Y at %I:%M %p') }}
+                    </p>
+                    {% else %}
+                    <p style="color: #90a4ae; font-size: 14px;">
+                        Start your first conversation to begin tracking your progress.
+                    </p>
+                    {% endif %}
+                </div>
+                
+                <div style="margin-top: 24px;">
+                    <h4 style="margin-bottom: 12px; color: #546e7a;">Quick Actions</h4>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <a href="/" class="btn btn-primary" style="text-decoration: none;">
+                            💬 Continue Therapy
+                        </a>
+                        <button onclick="downloadData()" class="btn btn-secondary">
+                            📥 Export
