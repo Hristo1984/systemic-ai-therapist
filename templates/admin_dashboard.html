@@ -129,6 +129,11 @@
             color: #f44336;
         }
         
+        .batch-icon {
+            background: rgba(127, 176, 105, 0.1);
+            color: #7FB069;
+        }
+        
         .stats-icon {
             background: rgba(76, 175, 80, 0.1);
             color: #4caf50;
@@ -196,6 +201,27 @@
             background: #ccc;
             cursor: not-allowed;
             transform: none;
+        }
+        
+        .batch-btn {
+            background: #7FB069;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            width: 100%;
+            text-align: center;
+            box-sizing: border-box;
+        }
+        
+        .batch-btn:hover {
+            background: #6fa055;
+            transform: translateY(-1px);
         }
         
         .stats-grid {
@@ -290,18 +316,18 @@
             </div>
             <nav class="nav-links">
                 <a href="/" class="nav-link">← Back to Chat</a>
+                <a href="/admin/batch-upload" class="nav-link">📚 Batch Upload</a>
                 <a href="/admin/logout" class="nav-link">Logout</a>
             </nav>
         </div>
     </header>
-
     <div class="container">
         <div class="dashboard-grid">
-            <!-- Upload Section -->
+            <!-- Single Upload Section -->
             <div class="dashboard-card">
                 <div class="card-header">
-                    <div class="card-icon upload-icon">📚</div>
-                    <h2 class="card-title">Upload Therapeutic Resources</h2>
+                    <div class="card-icon upload-icon">📄</div>
+                    <h2 class="card-title">Single Upload</h2>
                 </div>
                 
                 <div class="upload-area" id="uploadArea">
@@ -309,7 +335,7 @@
                         <input type="file" id="pdfFile" accept=".pdf" />
                     </div>
                     <p style="color: #90a4ae; font-size: 14px; margin-bottom: 16px;">
-                        Upload PDF books, research papers, or therapeutic resources
+                        Upload one PDF book or research paper (up to 25MB)
                     </p>
                     <button id="uploadBtn" class="upload-btn">
                         📤 Upload to Knowledge Base
@@ -322,6 +348,32 @@
                 </div>
             </div>
 
+            <!-- NEW: Batch Upload Section -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <div class="card-icon batch-icon">📚</div>
+                    <h2 class="card-title">Batch Upload System</h2>
+                </div>
+                
+                <p style="color: #546e7a; margin-bottom: 16px;">
+                    Upload multiple large therapeutic books at once with advanced compression.
+                </p>
+                
+                <div style="margin-bottom: 16px;">
+                    <strong>Features:</strong>
+                    <ul style="margin: 8px 0 0 20px; color: #546e7a; font-size: 14px;">
+                        <li>Support for 70MB+ PDFs</li>
+                        <li>85-90% compression ratio</li>
+                        <li>Progress tracking</li>
+                        <li>Batch processing for 30+ books</li>
+                    </ul>
+                </div>
+                
+                <a href="/admin/batch-upload" class="batch-btn">
+                    🚀 Open Batch Upload
+                </a>
+            </div>
+            
             <!-- Statistics -->
             <div class="dashboard-card">
                 <div class="card-header">
@@ -348,7 +400,7 @@
                     </div>
                 </div>
             </div>
-
+            
             <!-- Authorized Authors -->
             <div class="dashboard-card">
                 <div class="card-header">
@@ -370,24 +422,20 @@
             </div>
         </div>
     </div>
-
     <script>
         const uploadBtn = document.getElementById('uploadBtn');
         const pdfFile = document.getElementById('pdfFile');
         const uploadStatus = document.getElementById('uploadStatus');
         const uploadProgress = document.getElementById('uploadProgress');
         const uploadArea = document.getElementById('uploadArea');
-
         // Drag and drop functionality
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
         });
-
         uploadArea.addEventListener('dragleave', () => {
             uploadArea.classList.remove('dragover');
         });
-
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
@@ -397,7 +445,6 @@
                 pdfFile.files = files;
             }
         });
-
         function showStatus(message, isSuccess) {
             uploadStatus.textContent = message;
             uploadStatus.className = `status-message ${isSuccess ? 'status-success' : 'status-error'}`;
@@ -407,7 +454,6 @@
                 uploadStatus.style.display = 'none';
             }, 5000);
         }
-
         function showProgress(percent) {
             uploadProgress.style.display = 'block';
             uploadProgress.querySelector('.progress-fill').style.width = percent + '%';
@@ -418,40 +464,32 @@
                 }, 1000);
             }
         }
-
         uploadBtn.addEventListener('click', async () => {
             const file = pdfFile.files[0];
             if (!file) {
                 showStatus('Please select a PDF file first', false);
                 return;
             }
-
             if (file.type !== 'application/pdf') {
                 showStatus('Please select a valid PDF file', false);
                 return;
             }
-
             const formData = new FormData();
             formData.append('pdf', file);
             formData.append('upload_type', 'admin');
-
             uploadBtn.disabled = true;
             uploadBtn.textContent = '⏳ Uploading...';
             showProgress(0);
-
             try {
                 showStatus('Processing PDF...', true);
                 showProgress(30);
-
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
-
                 showProgress(80);
                 const result = await response.json();
                 showProgress(100);
-
                 if (result.success) {
                     showStatus(result.message, true);
                     pdfFile.value = '';
