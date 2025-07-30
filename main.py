@@ -5,12 +5,14 @@ import hashlib
 import re
 import sqlite3
 import uuid
+import secrets
 from datetime import datetime, timedelta
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
 import pdfplumber
 import gc
 from contextlib import contextmanager
+from functools import wraps
 
 load_dotenv()
 app = Flask(__name__)
@@ -42,6 +44,46 @@ for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs"]:
     os.makedirs(directory, exist_ok=True)
 
 # ================================
+# USER AUTHENTICATION FUNCTIONS
+# ================================
+
+def hash_password(password):
+    """Hash password with salt for secure storage"""
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+    return f"{salt}:{password_hash.hex()}"
+
+def verify_password(password, hashed):
+    """Verify password against hash"""
+    try:
+        salt, hash_hex = hashed.split(':')
+        password_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+        return hash_hex == password_hash.hex()
+    except:
+        return False
+
+def require_login(f):
+    """Decorator to require user login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session or not session.get('authenticated'):
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated_function
+
+def get_authenticated_user():
+    """Get current authenticated user or None"""
+    if 'user_id' not in session or not session.get('authenticated'):
+        return None
+    
+    with get_db_connection() as conn:
+        user = conn.execute(
+            'SELECT * FROM users WHERE id = ? AND is_active = 1', 
+            (session['user_id'],)
+        ).fetchone()
+        return dict(user) if user else None
+
+# ================================
 # PERSISTENT DATABASE SYSTEM
 # ================================
 
@@ -56,19 +98,56 @@ def get_db_connection():
         conn.close()
 
 def init_database():
-    """Initialize the persistent database schema"""
+    """Initialize the enhanced database schema with authentication"""
     with get_db_connection() as conn:
-        # Users table for persistent user accounts
+        # Enhanced users table with authentication
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
+                email TEXT UNIQUE,
+                username TEXT UNIQUE,
+                password_hash TEXT,
+                full_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 preferences JSON,
                 therapy_goals TEXT,
-                is_active BOOLEAN DEFAULT 1
+                is_active BOOLEAN DEFAULT 1,
+                is_verified BOOLEAN DEFAULT 1,
+                subscription_type TEXT DEFAULT 'free',
+                total_sessions INTEGER DEFAULT 0
             )
         ''')
+        
+        # Add authentication columns to existing users (migration)
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN email TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN username TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN full_name TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 1')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN subscription_type TEXT DEFAULT "free"')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN total_sessions INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
         
         # Conversations table for persistent chat history
         conn.execute('''
@@ -127,15 +206,48 @@ def init_database():
             )
         ''')
         
+        # User sessions for security
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_token TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Password reset tokens
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                reset_token TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                used BOOLEAN DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
         conn.commit()
-        print("✅ Database initialized successfully")
+        print("✅ Enhanced user authentication database initialized")
 
 # ================================
-# USER MANAGEMENT SYSTEM
+# USER MANAGEMENT SYSTEM (HYBRID)
 # ================================
 
 def get_or_create_user(session_id=None):
-    """Get existing user or create new persistent user"""
+    """Enhanced user management - supports both old anonymous and new authenticated users"""
+    # If user is authenticated, return authenticated user
+    if session.get('authenticated'):
+        user = get_authenticated_user()
+        if user:
+            return user
+    
+    # Legacy support for existing anonymous users
     if 'user_id' not in session:
         if session_id:
             # Try to find existing user by session
@@ -154,7 +266,7 @@ def get_or_create_user(session_id=None):
                     conn.commit()
                     return dict(user)
         
-        # Create new user
+        # Create new anonymous user (legacy support)
         user_id = str(uuid.uuid4())
         session['user_id'] = user_id
         
@@ -164,7 +276,7 @@ def get_or_create_user(session_id=None):
             )
             conn.commit()
             
-        print(f"✅ Created new persistent user: {user_id}")
+        print(f"✅ Created new anonymous user: {user_id}")
         return {'id': user_id, 'created_at': datetime.now(), 'is_active': True}
     
     else:
@@ -538,7 +650,7 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
     return context[:15000]  # Limit total context size
 
 # ================================
-# API FUNCTIONS (UNCHANGED)
+# API FUNCTIONS
 # ================================
 
 def call_claude_direct(system_prompt, user_message):
@@ -642,17 +754,207 @@ def is_admin_user():
     return session.get("is_admin", False)
 
 # ================================
-# FLASK ROUTES
+# AUTHENTICATION ROUTES
+# ================================
+
+@app.route("/welcome", methods=["GET"])
+def welcome():
+    """Public landing page for new visitors"""
+    return render_template("welcome.html")
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """User registration"""
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            email = data.get("email", "").strip().lower()
+            username = data.get("username", "").strip()
+            password = data.get("password", "")
+            full_name = data.get("full_name", "").strip()
+            
+            # Validation
+            if not email or not username or not password or not full_name:
+                return jsonify({"error": "All fields are required"}), 400
+            
+            if len(password) < 8:
+                return jsonify({"error": "Password must be at least 8 characters"}), 400
+                
+            if "@" not in email or "." not in email:
+                return jsonify({"error": "Please enter a valid email address"}), 400
+            
+            # Check if user exists
+            with get_db_connection() as conn:
+                existing_user = conn.execute(
+                    'SELECT id FROM users WHERE email = ? OR username = ?', 
+                    (email, username)
+                ).fetchone()
+                
+                if existing_user:
+                    return jsonify({"error": "Email or username already exists"}), 400
+                
+                # Create new user
+                user_id = str(uuid.uuid4())
+                password_hash = hash_password(password)
+                
+                conn.execute('''
+                    INSERT INTO users (id, email, username, password_hash, full_name, is_verified)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                ''', (user_id, email, username, password_hash, full_name))
+                conn.commit()
+                
+                # Log them in
+                session['user_id'] = user_id
+                session['authenticated'] = True
+                session['username'] = username
+                
+                print(f"✅ New user registered: {username} ({email})")
+                return jsonify({
+                    "success": True, 
+                    "message": "Account created successfully!",
+                    "redirect": "/"
+                })
+                
+        except Exception as e:
+            print(f"Registration error: {e}")
+            return jsonify({"error": "Registration failed. Please try again."}), 500
+    
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """User login"""
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            email_or_username = data.get("email_or_username", "").strip().lower()
+            password = data.get("password", "")
+            
+            if not email_or_username or not password:
+                return jsonify({"error": "Email/username and password are required"}), 400
+            
+            # Find user
+            with get_db_connection() as conn:
+                user = conn.execute('''
+                    SELECT * FROM users 
+                    WHERE (email = ? OR username = ?) AND is_active = 1
+                ''', (email_or_username, email_or_username)).fetchone()
+                
+                if not user or not user['password_hash'] or not verify_password(password, user['password_hash']):
+                    return jsonify({"error": "Invalid email/username or password"}), 401
+                
+                # Update last active
+                conn.execute(
+                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                    (user['id'],)
+                )
+                conn.commit()
+                
+                # Log them in
+                session['user_id'] = user['id']
+                session['authenticated'] = True
+                session['username'] = user['username']
+                
+                print(f"✅ User logged in: {user['username']}")
+                return jsonify({
+                    "success": True,
+                    "message": f"Welcome back, {user['full_name'] or user['username']}!",
+                    "redirect": "/"
+                })
+                
+        except Exception as e:
+            print(f"Login error: {e}")
+            return jsonify({"error": "Login failed. Please try again."}), 500
+    
+    return render_template("login.html")
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    """User logout"""
+    username = session.get('username', 'User')
+    session.clear()
+    
+    if request.method == "POST":
+        return jsonify({"success": True, "message": "Logged out successfully"})
+    
+    return redirect('/welcome')
+
+@app.route("/profile", methods=["GET", "POST"])
+@require_login
+def profile():
+    """User profile management"""
+    user = get_authenticated_user()
+    if not user:
+        return redirect('/login')
+    
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            full_name = data.get("full_name", "").strip()
+            therapy_goals = data.get("therapy_goals", "").strip()
+            
+            with get_db_connection() as conn:
+                conn.execute('''
+                    UPDATE users 
+                    SET full_name = ?, therapy_goals = ?
+                    WHERE id = ?
+                ''', (full_name, therapy_goals, user['id']))
+                conn.commit()
+            
+            return jsonify({"success": True, "message": "Profile updated successfully"})
+            
+        except Exception as e:
+            return jsonify({"error": "Failed to update profile"}), 500
+    
+    # Get user stats
+    with get_db_connection() as conn:
+        stats = conn.execute('''
+            SELECT 
+                COUNT(DISTINCT c.id) as total_conversations,
+                COUNT(DISTINCT d.id) as total_documents,
+                MAX(c.timestamp) as last_session
+            FROM users u
+            LEFT JOIN conversations c ON u.id = c.user_id
+            LEFT JOIN user_documents d ON u.id = d.user_id AND d.is_active = 1
+            WHERE u.id = ?
+        ''', (user['id'],)).fetchone()
+    
+    return render_template("profile.html", user=user, stats=dict(stats))
+
+# ================================
+# MAIN APPLICATION ROUTES
 # ================================
 
 @app.route("/", methods=["GET"])
-def index():
-    user = get_or_create_user()
-    is_admin = is_admin_user()
-    return render_template("index.html", is_admin=is_admin, user_id=user['id'])
+def root():
+    """Root route - hybrid support for authenticated and anonymous users"""
+    # If user is authenticated, go to chat
+    if session.get('authenticated'):
+        user = get_authenticated_user()
+        if user:
+            is_admin = is_admin_user()
+            return render_template("index.html", 
+                                 is_admin=is_admin, 
+                                 user_id=user['id'],
+                                 username=user.get('username', ''),
+                                 full_name=user.get('full_name', user.get('username', '')))
+    
+    # Legacy support for anonymous users OR redirect to welcome
+    if 'user_id' in session:
+        # Existing anonymous user - continue their session
+        user = get_or_create_user()
+        is_admin = is_admin_user()
+        return render_template("index.html", is_admin=is_admin, user_id=user['id'])
+    else:
+        # New visitor - redirect to welcome page
+        return redirect('/welcome')
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
+    """Admin panel"""
     if request.method == "POST":
         password = request.form.get("password")
         if password == admin_password:
@@ -678,9 +980,22 @@ def admin_logout():
 
 @app.route("/chat", methods=["POST"])
 def chat():
+    """Chat endpoint - supports both authenticated and anonymous users"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
+        
+        # Increment session counter for authenticated users
+        if session.get('authenticated'):
+            with get_db_connection() as conn:
+                conn.execute(
+                    'UPDATE users SET total_sessions = total_sessions + 1 WHERE id = ?',
+                    (user_id,)
+                )
+                conn.commit()
         
         data = request.get_json()
         user_input = data.get("user_input", "")
@@ -692,7 +1007,8 @@ def chat():
         save_conversation_message(user_id, "user", user_input)
 
         # Build system prompt based on agent
-        base_instruction = "You are a professional therapeutic AI with access to curated knowledge and conversation history. Provide continuity and reference previous conversations when appropriate."
+        user_name = user.get('full_name') or user.get('username') or 'User'
+        base_instruction = f"You are a professional therapeutic AI supporting {user_name}. You have access to curated knowledge and conversation history. Provide continuity and reference previous conversations when appropriate."
 
         agent_prompts = {
             "case_assistant": f"{base_instruction} You assist with social work case analysis.",
@@ -710,7 +1026,11 @@ def chat():
         # Save AI response
         save_conversation_message(user_id, "assistant", response_text, agent)
 
-        return jsonify({"response": response_text, "user_id": user_id})
+        return jsonify({
+            "response": response_text, 
+            "user_id": user_id,
+            "username": user.get('username', '')
+        })
         
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
@@ -718,8 +1038,12 @@ def chat():
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    """File upload endpoint - supports both authenticated and anonymous users"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         
         if "pdf" not in request.files:
@@ -779,8 +1103,12 @@ def upload():
 
 @app.route("/clear", methods=["POST"])
 def clear():
+    """Clear chat history"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         clear_user_conversation(user_id)
         return jsonify({"message": "Chat history cleared (documents and progress retained)"})
@@ -790,8 +1118,12 @@ def clear():
 
 @app.route("/clear-documents", methods=["POST"])
 def clear_documents():
+    """Clear personal documents"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         cleared_count = clear_user_documents(user_id)
         return jsonify({"message": f"Cleared {cleared_count} personal documents"})
@@ -804,6 +1136,9 @@ def get_conversation_history():
     """Get user's persistent conversation history"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         history = get_user_conversation_history(user_id, limit=100)
         return jsonify({"conversation_history": history, "user_id": user_id})
@@ -816,6 +1151,9 @@ def get_personal_documents():
     """Get user's persistent personal documents"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         docs = get_user_documents(user_id)
         
@@ -870,6 +1208,9 @@ def get_user_stats():
     """Get current user's statistics"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         
         with get_db_connection() as conn:
@@ -891,8 +1232,8 @@ def get_user_stats():
             "conversation_messages": conversation_count,
             "personal_documents": document_count,
             "days_active": days_active,
-            "created_at": user['created_at'],
-            "last_active": user['last_active']
+            "created_at": user.get('created_at'),
+            "last_active": user.get('last_active')
         })
     except Exception as e:
         print(f"Error in user stats endpoint: {e}")
@@ -903,6 +1244,9 @@ def get_log():
     """Download user's conversation history"""
     try:
         user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
         user_id = user['id']
         
         # Get full conversation history
@@ -914,6 +1258,8 @@ def get_log():
         # Format for download
         export_data = {
             "user_id": user_id,
+            "username": user.get('username', ''),
+            "full_name": user.get('full_name', ''),
             "export_date": datetime.now().isoformat(),
             "conversation_history": history,
             "personal_documents": [
@@ -960,6 +1306,7 @@ def health():
         # Database stats
         with get_db_connection() as conn:
             total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
             total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
             total_user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
         
@@ -976,12 +1323,16 @@ def health():
             },
             "database": {
                 "total_users": total_users,
+                "authenticated_users": authenticated_users,
+                "anonymous_users": total_users - authenticated_users,
                 "total_conversations": total_conversations,
                 "total_user_documents": total_user_docs,
                 "knowledge_base_documents": len(knowledge_base["documents"]),
                 "authorized_authors": len(knowledge_base.get("authorized_authors", []))
             },
             "features": {
+                "user_authentication": True,
+                "anonymous_sessions": True,
                 "persistent_memory": True,
                 "conversation_continuity": True,
                 "personal_documents": True,
@@ -1013,10 +1364,11 @@ def admin_cleanup():
         days_old = int(request.json.get("days_old", 90))
         
         with get_db_connection() as conn:
-            # Clean old inactive users
+            # Clean old inactive users (anonymous only)
             old_users = conn.execute('''
                 DELETE FROM users 
                 WHERE last_active < datetime('now', '-{} days') 
+                AND email IS NULL
                 AND id NOT IN (SELECT DISTINCT user_id FROM conversations WHERE timestamp > datetime('now', '-30 days'))
             '''.format(days_old))
             
@@ -1040,7 +1392,7 @@ def admin_cleanup():
         return jsonify({
             "message": "Database cleanup completed",
             "removed": {
-                "old_users": old_users.rowcount,
+                "old_anonymous_users": old_users.rowcount,
                 "orphaned_conversations": orphaned_convs.rowcount,
                 "orphaned_documents": orphaned_docs.rowcount
             }
@@ -1053,8 +1405,8 @@ def admin_cleanup():
 # ================================
 
 def initialize_system():
-    """Initialize the therapeutic AI system"""
-    print("🚀 Initializing Therapeutic AI with Persistent Memory...")
+    """Initialize the therapeutic AI system with hybrid authentication"""
+    print("🚀 Initializing Therapeutic AI with Hybrid Authentication...")
     
     # Initialize database
     init_database()
@@ -1066,10 +1418,11 @@ def initialize_system():
     # Check database health
     with get_db_connection() as conn:
         total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+        authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
         total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-        print(f"👥 Database: {total_users} users, {total_conversations} conversations")
+        print(f"👥 Database: {total_users} users ({authenticated_users} registered, {total_users - authenticated_users} anonymous), {total_conversations} conversations")
     
-    print("✅ Therapeutic AI system initialized successfully!")
+    print("✅ Therapeutic AI system with hybrid authentication initialized successfully!")
 
 if __name__ == "__main__":
     initialize_system()
