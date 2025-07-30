@@ -175,11 +175,17 @@
 
     .message-bubble {
       max-width: 75%;
+      min-width: 120px;
+      width: fit-content;
       padding: 12px 16px;
       border-radius: 18px;
       font-size: 15px;
       line-height: 1.4;
       word-wrap: break-word;
+      word-break: keep-all;
+      hyphens: none;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
       position: relative;
       box-shadow: var(--shadow);
     }
