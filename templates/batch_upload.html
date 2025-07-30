@@ -1,1 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batch Upload - Therapeutic Books</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e8ecf0 100%);
+            min-height: 100vh;
+            color: #2c3e50;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            color: #4A90B8;
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            color: #546e7a;
+        }
+        
+        .upload-area {
+            background: white;
+            padding: 32px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+            margin-bottom: 24px;
+        }
+        
+        .batch-upload {
+            border: 3px dashed #4A90B8;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-bottom: 24px;
+        }
+        
+        .batch-upload.dragover {
+            border-color: #7FB069;
+            background: rgba(127, 176, 105, 0.1);
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .batch-upload h3 {
+            font-size: 20px;
+            margin-bottom: 12px;
+            color: #2c3e50;
+        }
+        
+        .batch-upload p {
+            color: #546e7a;
+            margin-bottom: 20px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: none;
+            font-size: 14px;
+            margin: 0 8px;
+        }
+        
+        .btn-primary {
+            background: #4A90B8;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #3a7ba8;
+            transform: translateY(-1px);
+        }
+        
+        .btn-success {
+            background: #7FB069;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #6fa055;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .file-list {
+            margin-top: 24px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border: 1px solid #e8ecf0;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: #f8f9fa;
+        }
+        
+        .file-info {
+            flex: 1;
+        }
+        
+        .file-name {
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        
+        .file-size {
+            font-size: 12px;
+            color: #90a4ae;
+        }
+        
+        .file-remove {
+            background: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .progress-section {
+            background: white;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+            margin-bottom: 24px;
+            display: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e8ecf0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4A90B8, #7FB069);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .current-book {
+            font-weight: 500;
+            color: #4A90B8;
+        }
+        
+        .log-area {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 16px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .results-section {
+            background: white;
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 4px 16px rgba(44, 62, 80, 0.08);
+            display: none;
+        }
+        
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+        
+        .result-item {
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #e8ecf0;
+        }
+        
+        .result-success {
+            background: rgba(127, 176, 105, 0.1);
+            border-color: #7FB069;
+        }
+        
+        .result-error {
+            background: rgba(244, 67, 54, 0.1);
+            border-color: #f44336;
+        }
+        
+        .result-title {
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        
+        .result-details {
+            font-size: 12px;
+            color: #546e7a;
+        }
+        
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #e8ecf0;
+        }
+        
+        .stat-number {
+            font-size: 24px;
+            font-weight: 600;
+            color: #4A90B8;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #90a4ae;
+            margin-top: 4px;
+        }
 
+        .nav-link {
+            color: #4A90B8;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            display: inline-block;
+            margin-bottom: 16px;
+        }
+        
+        .nav-link:hover {
+            background: rgba(74, 144, 184, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/admin" class="nav-link">← Back to Admin Dashboard</a>
+        
+        <div class="header">
+            <h1>📚 Batch Upload Therapeutic Books</h1>
+            <p>Upload up to 30+ books including large 70MB+ files with advanced compression</p>
+        </div>
+
+        <div class="upload-area">
+            <div class="batch-upload" id="batchUpload">
+                <div class="upload-icon">📚</div>
+                <h3>Drag & Drop Multiple PDFs Here</h3>
+                <p>Or click to select multiple therapeutic books at once<br>
+                   <strong>Supports files up to 200MB with 90%+ compression</strong></p>
+                <input type="file" id="fileInput" class="file-input" multiple accept=".pdf">
+                <button type="button" class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                    Select Books
+                </button>
+            </div>
+
+            <div id="fileList" class="file-list" style="display: none;">
+                <h4>Selected Books:</h4>
+                <div id="fileItems"></div>
+                <div style="margin-top: 16px; text-align: center;">
+                    <button type="button" id="startUpload" class="btn btn-success">
+                        🚀 Start Batch Upload
+                    </button>
+                    <button type="button" id="clearFiles" class="btn btn-primary">
+                        Clear All
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="progressSection" class="progress-section">
+            <h3>Upload Progress</h3>
+            <div class="progress-info">
+                <span id="currentBook" class="current-book">Preparing...</span>
+                <span id="progressText">0 / 0</span>
+            </div>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill">0%</div>
+            </div>
+            <div class="log-area" id="logArea"></div>
+        </div>
+
+        <div id="resultsSection" class="results-section">
+            <h3>Upload Results</h3>
+            <div id="statsSummary" class="stats-summary"></div>
+            <div id="resultsGrid" class="results-grid"></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let uploadResults = [];
+
+        const batchUpload = document.getElementById('batchUpload');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const fileItems = document.getElementById('fileItems');
+        const startUpload = document.getElementById('startUpload');
+        const clearFiles = document.getElementById('clearFiles');
+        const progressSection = document.getElementById('progressSection');
+        const resultsSection = document.getElementById('resultsSection');
+
+        // Drag and drop functionality
+        batchUpload.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            batchUpload.classList.add('dragover');
+        });
+
+        batchUpload.addEventListener('dragleave', () => {
+            batchUpload.classList.remove('dragover');
+        });
+
+        batchUpload.addEventListener('drop', (e) => {
+            e.preventDefault();
+            batchUpload.classList.remove('dragover');
+            
+            const files = Array.from(e.dataTransfer.files).filter(file => 
+                file.type === 'application/pdf'
+            );
+            
+            addFiles(files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            addFiles(files);
+        });
+
+        function addFiles(files) {
+            for (const file of files) {
+                if (!selectedFiles.find(f => f.name === file.name)) {
+                    selectedFiles.push(file);
+                }
+            }
+            updateFileList();
+        }
+
+        function updateFileList() {
+            if (selectedFiles.length === 0) {
+                fileList.style.display = 'none';
+                return;
+            }
+
+            fileList.style.display = 'block';
+            fileItems.innerHTML = '';
+
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                
+                const sizeInMB = (file.size / 1024 / 1024).toFixed(1);
+                
+                fileItem.innerHTML = `
+                    <div class="file-info">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-size">${sizeInMB} MB</div>
+                    </div>
+                    <button class="file-remove" onclick="removeFile(${index})">Remove</button>
+                `;
+                
+                fileItems.appendChild(fileItem);
+            });
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        clearFiles.addEventListener('click', () => {
+            selectedFiles = [];
+            updateFileList();
+        });
+
+        startUpload.addEventListener('click', async () => {
+            if (selectedFiles.length === 0) {
+                alert('Please select some PDF files first');
+                return;
+            }
+
+            // Show progress section
+            progressSection.style.display = 'block';
+            resultsSection.style.display = 'none';
+            startUpload.disabled = true;
+            uploadResults = [];
+
+            const totalFiles = selectedFiles.length;
+            let currentFile = 0;
+
+            logMessage(`🚀 Starting batch upload of ${totalFiles} books...`);
+
+            for (const file of selectedFiles) {
+                currentFile++;
+                updateProgress(currentFile, totalFiles, file.name);
+
+                try {
+                    const result = await uploadSingleFile(file);
+                    uploadResults.push(result);
+                    
+                    if (result.success) {
+                        logMessage(`✅ ${file.name} uploaded successfully (${result.compression_ratio}% compression)`);
+                    } else {
+                        logMessage(`❌ ${file.name} failed: ${result.error}`);
+                    }
+                } catch (error) {
+                    const errorResult = {
+                        filename: file.name,
+                        success: false,
+                        error: error.message
+                    };
+                    uploadResults.push(errorResult);
+                    logMessage(`❌ ${file.name} error: ${error.message}`);
+                }
+
+                // Brief pause between uploads
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            // Show results
+            showResults();
+            startUpload.disabled = false;
+            logMessage('🎉 Batch upload complete!');
+        });
+
+        async function uploadSingleFile(file) {
+            const formData = new FormData();
+            formData.append('pdf', file);
+            formData.append('upload_type', 'admin');
+            formData.append('use_streaming', 'true'); // Enable streaming for large files
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const result = await response.json();
+            return {
+                filename: file.name,
+                success: result.success,
+                size_mb: (file.size / 1024 / 1024).toFixed(1),
+                compression_ratio: result.compression_ratio || 0,
+                authors: result.extracted_authors || [],
+                error: result.message
+            };
+        }
+
+        function updateProgress(current, total, filename) {
+            const percentage = Math.round((current / total) * 100);
+            const progressFill = document.getElementById('progressFill');
+            const currentBook = document.getElementById('currentBook');
+            const progressText = document.getElementById('progressText');
+
+            progressFill.style.width = percentage + '%';
+            progressFill.textContent = percentage + '%';
+            currentBook.textContent = `Processing: ${filename}`;
+            progressText.textContent = `${current} / ${total}`;
+        }
+
+        function logMessage(message) {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            logArea.innerHTML += `[${timestamp}] ${message}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function showResults() {
+            resultsSection.style.display = 'block';
+            
+            // Calculate stats
+            const successful = uploadResults.filter(r => r.success).length;
+            const failed = uploadResults.filter(r => !r.success).length;
+            const totalSize = uploadResults.reduce((sum, r) => sum + parseFloat(r.size_mb || 0), 0);
+            const avgCompression = uploadResults
+                .filter(r => r.compression_ratio > 0)
+                .reduce((sum, r, _, arr) => sum + r.compression_ratio / arr.length, 0);
+
+            // Show stats summary
+            const statsSummary = document.getElementById('statsSummary');
+            statsSummary.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${successful}</div>
+                    <div class="stat-label">Successful</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${failed}</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${totalSize.toFixed(1)}</div>
+                    <div class="stat-label">Total MB</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${avgCompression.toFixed(1)}%</div>
+                    <div class="stat-label">Avg Compression</div>
+                </div>
+            `;
+
+            // Show detailed results
+            const resultsGrid = document.getElementById('resultsGrid');
+            resultsGrid.innerHTML = '';
+
+            uploadResults.forEach(result => {
+                const resultItem = document.createElement('div');
+                resultItem.className = `result-item ${result.success ? 'result-success' : 'result-error'}`;
+                
+                const authorsText = result.authors && result.authors.length > 0 
+                    ? `Authors: ${result.authors.join(', ')}` 
+                    : 'No authors detected';
+
+                resultItem.innerHTML = `
+                    <div class="result-title">${result.filename}</div>
+                    <div class="result-details">
+                        ${result.success ? `
+                            Size: ${result.size_mb} MB<br>
+                            Compression: ${result.compression_ratio}%<br>
+                            ${authorsText}
+                        ` : `
+                            Error: ${result.error}
+                        `}
+                    </div>
+                `;
+                
+                resultsGrid.appendChild(resultItem);
+            });
+        }
+    </script>
+</body>
+</html>
