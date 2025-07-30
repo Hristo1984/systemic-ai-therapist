@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Systemic AI Co-Therapist - Couples & Family Therapy Support</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e8ecf0 100%);
+            min-height: 100vh;
+            color: #2c3e50;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 16px 24px;
+            border-bottom: 1px solid rgba(232, 236, 240, 0.5);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+        }
+        
+        .nav {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .brand-icon {
+            width: 42px;
+            height: 42px;
+            background: linear-gradient(135deg, #4A90B8, #5DADE2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 18px;
+        }
+        
+        .brand-text h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .brand-subtitle {
+            font-size: 13px;
+            color: #90a4ae;
+        }
+        
+        .nav-buttons {
+            display: flex;
+            gap: 12px;
+        }
+        
+        .btn {
+            padding: 8px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: #4A90B8;
+            border: 2px solid #4A90B8;
+        }
+        
+        .btn-outline:hover {
+            background: #4A90B8;
+            color: white;
+        }
+        
+        .btn-primary {
+            background: #4A90B8;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #3a7ba8;
+            transform: translateY(-1px);
+        }
+        
+        .main {
+            margin-top: 80px;
+            min-height: calc(100vh - 80px);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .hero {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 24px;
+        }
+        
+        .hero-content {
+            max-width: 800px;
+            text-align: center;
+        }
+        
+        .hero h2 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #4A90B8, #7FB069);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            line-height: 1.6;
+            color: #546e7a;
+            margin-bottom: 40px;
+        }
+        
+        .hero-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn-large {
+            padding: 16px 32px;
+            font-size: 16px;
+            border-radius: 12px;
+        }
+        
+        .features {
+            background: white;
+            padding: 80px 24px;
+        }
+        
+        .features-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .features h3 {
+            font-size: 32px;
+            text-align: center;
+            margin-bottom: 60px;
+            color: #2c3e50;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+        }
+        
+        .feature {
+            text-align: center;
+            padding: 30px;
+            border-radius: 16px;
+            background: #f8f9fa;
+            border: 1px solid #e8ecf0;
+        }
+        
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #4A90B8, #7FB069);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 24px;
+        }
+        
+        .feature h4 {
+            font-size: 20px;
+            margin-bottom: 12px;
+            color: #2c3e50;
+        }
+        
+        .feature p {
+            color: #546e7a;
+            line-height: 1.5;
+        }
+        
+        .cta {
+            background: linear-gradient(135deg, #4A90B8, #7FB069);
+            color: white;
+            padding: 80px 24px;
+            text-align: center;
+        }
+        
+        .cta h3 {
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+        
+        .cta p {
+            font-size: 18px;
+            margin-bottom: 40px;
+            opacity: 0.9;
+        }
+        
+        .footer {
+            background: #2c3e50;
+            color: white;
+            padding: 40px 24px;
+            text-align: center;
+        }
+        
+        .footer p {
+            opacity: 0.8;
+        }
+        
+        @media (max-width: 768px) {
+            .hero h2 {
+                font-size: 36px;
+            }
+            
+            .hero p {
+                font-size: 18px;
+            }
+            
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+                gap: 30px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="brand">
+                <div class="brand-icon">🧠</div>
+                <div class="brand-text">
+                    <h1>Systemic AI Co-Therapist</h1>
+                    <div class="brand-subtitle">Couples & Family Therapy Support</div>
+                </div>
+            </div>
+            <div class="nav-buttons">
+                <a href="/login" class="btn btn-outline">Sign In</a>
+                <a href="/register" class="btn btn-primary">Get Started</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="main">
+        <section class="hero">
+            <div class="hero-content">
+                <h2>Strengthen Your Relationships with AI-Powered Systemic Therapy</h2>
+                <p>Evidence-based couples and family therapy support, available 24/7. Build stronger connections and healthier relationships with personalized therapeutic guidance.</p>
+                <div class="hero-buttons">
+                    <a href="/register" class="btn btn-primary btn-large">Start Your Journey</a>
+                    <a href="/login" class="btn btn-outline btn-large">Sign In</a>
+                </div>
+            </div>
+        </section>
+
+        <section class="features">
+            <div class="features-container">
+                <h3>Why Choose Systemic AI Co-Therapist?</h3>
+                <div class="features-grid">
+                    <div class="feature">
+                        <div class="feature-icon">👨‍👩‍👧‍👦</div>
+                        <h4>Systemic Approach</h4>
+                        <p>Specialized in couples and family therapy using proven systemic methods and evidence-based interventions.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">🧠</div>
+                        <h4>Persistent Memory</h4>
+                        <p>Your therapeutic relationship continues across sessions. All conversations and progress are securely saved.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">📚</div>
+                        <h4>Professional Knowledge</h4>
+                        <p>Access to curated therapeutic resources, research papers, and evidence-based treatment approaches.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">🔒</div>
+                        <h4>Completely Private</h4>
+                        <p>Your conversations and documents are encrypted and private. Only you have access to your therapeutic journey.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">📖</div>
+                        <h4>Personal Documents</h4>
+                        <p>Upload your own relationship materials, session notes, or documents for personalized therapeutic support.</p>
+                    </div>
+                    
+                    <div class="feature">
+                        <div class="feature-icon">⏰</div>
+                        <h4>Available 24/7</h4>
+                        <p>Get therapeutic support whenever you need it. No appointments necessary, no waiting lists.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="cta">
+            <h3>Ready to Strengthen Your Relationships?</h3>
+            <p>Join thousands of couples and families building healthier connections with AI-powered systemic therapy.</p>
+            <a href="/register" class="btn btn-outline btn-large" style="background: white; color: #4A90B8;">Create Your Account</a>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2025 Systemic AI Co-Therapist. Professional couples and family therapy support.</p>
+    </footer>
+</body>
+</html>
