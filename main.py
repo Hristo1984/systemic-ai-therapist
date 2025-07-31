@@ -2222,7 +2222,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
 else:
     initialize_system()
-    application = app✅ File saved to: {file_path}")
+    print(f"✅ Personal file saved to: {file_path}")
             
             # Check if file actually exists
             if os.path.exists(file_path):
