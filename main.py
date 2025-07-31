@@ -496,7 +496,316 @@ class StreamingPDFProcessor:
                     chunk_text = self._extract_chunk_text(pdf, start_page, end_page)
                     
                     if chunk_text.strip():
-                        # Compress the content
+                        # Compress the chunk immediately
+                        compressed_chunk, metadata = self.compressor.ultra_compress(chunk_text)
+                        
+                        chunk_info = {
+                            'compressed_data': compressed_chunk,
+                            'metadata': metadata,
+                            'page_range': f"{start_page + 1}-{end_page}",
+                            'chunk_index': len(compressed_chunks)
+                        }
+                        
+                        compressed_chunks.append(chunk_info)
+                        
+                        # Update stats
+                        total_original_size += metadata['original_size']
+                        total_compressed_size += metadata['compressed_size']
+                        total_pages += (end_page - start_page)
+                        
+                        # Extract authors from first chunk
+                        if len(compressed_chunks) == 1:
+                            chunk_authors = extract_authors_from_text(chunk_text, os.path.basename(file_path))
+                            authors.update(chunk_authors)
+                    
+                    # Memory management
+                    if len(compressed_chunks) % 4 == 0:  # Every 4 chunks
+                        gc.collect()
+                        print(f"  Processed {end_page}/{total_pdf_pages} pages...")
+            
+            overall_compression = (1 - total_compressed_size / total_original_size) * 100 if total_original_size > 0 else 0
+            
+            result = {
+                'success': True,
+                'compressed_chunks': compressed_chunks,
+                'total_chunks': len(compressed_chunks),
+                'total_pages': total_pages,
+                'original_size': total_original_size,
+                'compressed_size': total_compressed_size,
+                'compression_ratio': round(overall_compression, 1),
+                'file_size_mb': round(file_size_mb, 2),
+                'extracted_authors': list(authors),
+                'processing_method': 'streaming_ultra_compressed'
+            }
+            
+            print(f"✅ Streaming processing complete: {total_original_size:,} → {total_compressed_size:,} bytes ({overall_compression:.1f}% compression)")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Streaming processing failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {"error": error_msg}
+        finally:
+            gc.collect()
+    
+    def _extract_chunk_text(self, pdf, start_page: int, end_page: int) -> str:
+        """Extract text from a chunk of PDF pages"""
+        chunk_text = ""
+        
+        for page_num in range(start_page, end_page):
+            try:
+                page = pdf.pages[page_num]
+                page_text = page.extract_text()
+                if page_text:
+                    chunk_text += f"\n--- Page {page_num + 1} ---\n"
+                    chunk_text += page_text.strip() + "\n"
+            except Exception as e:
+                print(f"  ⚠️ Error extracting page {page_num + 1}: {e}")
+                continue
+        
+        return chunk_text
+
+# ================================
+# MEMORY-EFFICIENT PDF PROCESSING
+# ================================
+
+def extract_text_from_pdf_efficient(file_path, max_size_mb=100):
+    """Memory-efficient PDF extraction with size limits"""
+    try:
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
+        
+        if file_size > max_size_mb:
+            return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
+        
+        text_content = ""
+        page_count = 0
+        
+        with pdfplumber.open(file_path) as pdf:
+            total_pages = len(pdf.pages)
+            print(f"PDF has {total_pages} pages")
+            
+            for page_num, page in enumerate(pdf.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content += f"\n--- Page {page_num + 1} ---\n"
+                        text_content += page_text.strip() + "\n"
+                        page_count += 1
+                    
+                    # Memory management: collect garbage every 25 pages
+                    if page_num % 25 == 0:
+                        gc.collect()
+                        
+                    # Progress indication for large files
+                    if page_num % 50 == 0 and page_num > 0:
+                        print(f"Processed {page_num}/{total_pages} pages...")
+                        
+                except Exception as e:
+                    print(f"Error extracting page {page_num + 1}: {e}")
+                    continue
+        
+        if not text_content.strip():
+            return f"No text could be extracted from {os.path.basename(file_path)}"
+        
+        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
+        return text_content
+        
+    except Exception as e:
+        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg
+    finally:
+        # Force garbage collection
+        gc.collect()
+
+def extract_authors_from_text(text, filename):
+    """Extract author names from PDF text and filename"""
+    authors = set()
+    
+    # Common author extraction patterns
+    author_patterns = [
+        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[-–—]\s*",
+        r"Author[s]?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+    ]
+    
+    # Extract from filename
+    filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
+    if filename_match:
+        potential_author = filename_match.group(1).strip()
+        if len(potential_author.split()) >= 2:
+            authors.add(potential_author.title())
+    
+    # Extract from text content (first 3000 chars for efficiency)
+    search_text = text[:3000] if len(text) > 3000 else text
+    for pattern in author_patterns:
+        matches = re.findall(pattern, search_text)
+        for match in matches:
+            if len(match.split()) >= 2:
+                authors.add(match.strip())
+    
+    return list(authors)
+
+# ================================
+# KNOWLEDGE BASE SYSTEM
+# ================================
+
+def load_knowledge_base():
+    """Load admin knowledge base with fallback"""
+    try:
+        if os.path.exists(KNOWLEDGE_BASE_FILE):
+            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading knowledge base: {e}")
+    
+    return {
+        "documents": [],
+        "authorized_authors": [],
+        "last_updated": None,
+        "total_documents": 0,
+        "total_characters": 0
+    }
+
+def save_knowledge_base(knowledge_base):
+    """Save admin knowledge base with metadata"""
+    try:
+        knowledge_base["last_updated"] = datetime.now().isoformat()
+        knowledge_base["total_documents"] = len(knowledge_base["documents"])
+        
+        # Calculate total characters from both compressed and uncompressed docs
+        total_chars = 0
+        for doc in knowledge_base["documents"]:
+            if doc.get("content_type") == "streaming_ultra_compressed":
+                total_chars += doc.get("character_count", 0)
+            elif doc.get("content_type") == "ultra_compressed":
+                total_chars += doc.get("character_count", 0)
+            else:
+                total_chars += len(doc.get("content", ""))
+        
+        knowledge_base["total_characters"] = total_chars
+        
+        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
+            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
+            
+        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
+    except Exception as e:
+        print(f"❌ Error saving knowledge base: {e}")
+
+def add_document_to_knowledge_base(file_path, filename, is_core=True):
+    """Add document to admin knowledge base with database tracking (legacy method)"""
+    try:
+        # Extract text efficiently
+        text_content = extract_text_from_pdf_efficient(file_path)
+        
+        if "Error" in text_content or "too large" in text_content:
+            return {"error": text_content}
+        
+        # Extract authors
+        extracted_authors = extract_authors_from_text(text_content, filename)
+        
+        # Create document info
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+        doc_id = str(uuid.uuid4())
+        
+        doc_info = {
+            "id": doc_id,
+            "filename": filename,
+            "content": text_content,
+            "added_date": datetime.now().isoformat(),
+            "file_hash": file_hash,
+            "is_core": is_core,
+            "character_count": len(text_content),
+            "type": "admin_therapeutic_resource",
+            "extracted_authors": extracted_authors,
+            "pdf_extraction_status": "success"
+        }
+        
+        # Add to knowledge base
+        knowledge_base = load_knowledge_base()
+        knowledge_base["documents"].append(doc_info)
+        
+        # Update authorized authors
+        if "authorized_authors" not in knowledge_base:
+            knowledge_base["authorized_authors"] = []
+        
+        for author in extracted_authors:
+            if author not in knowledge_base["authorized_authors"]:
+                knowledge_base["authorized_authors"].append(author)
+                print(f"✅ Added authorized author: {author}")
+        
+        save_knowledge_base(knowledge_base)
+        
+        # Track in database
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO knowledge_base_docs 
+                (id, filename, file_hash, character_count, extracted_authors)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
+            conn.commit()
+        
+        print(f"✅ Added {filename} to knowledge base ({len(text_content)} characters)")
+        return doc_info
+        
+    except Exception as e:
+        error_msg = f"Error adding document: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+    finally:
+        gc.collect()
+
+def add_document_compressed(file_path, filename, is_core=True):
+    """
+    Add document with compression and smart storage
+    Reduces memory usage by 70-90%
+    """
+    try:
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        print(f"📊 Processing: {filename} ({file_size_mb:.1f}MB)")
+        
+        # Use streaming processor for large files
+        if file_size_mb > 25:
+            processor = StreamingPDFProcessor()
+            result = processor.process_large_pdf_streaming(file_path)
+            
+            if not result.get('success'):
+                return {"error": result.get('error', 'Processing failed')}
+            
+            # Create document info for streaming result
+            file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+            doc_id = str(uuid.uuid4())
+            
+            doc_info = {
+                "id": doc_id,
+                "filename": filename,
+                "content_type": "streaming_ultra_compressed",
+                "compressed_chunks": result['compressed_chunks'],
+                "total_chunks": result['total_chunks'],
+                "added_date": datetime.now().isoformat(),
+                "file_hash": file_hash,
+                "is_core": is_core,
+                "character_count": result['original_size'],
+                "compressed_size": result['compressed_size'],
+                "compression_ratio": result['compression_ratio'],
+                "total_pages": result['total_pages'],
+                "file_size_mb": result['file_size_mb'],
+                "type": "admin_therapeutic_resource",
+                "extracted_authors": result['extracted_authors'],
+                "pdf_extraction_status": "success_streaming_compressed",
+                "processing_method": result['processing_method']
+            }
+        else:
+            # Use regular processing for smaller files with compression
+            text_content = extract_text_from_pdf_efficient(file_path)
+            
+            if "Error" in text_content or "too large" in text_content:
+                return {"error": text_content}
+            
+            # Compress the content
             compressor = AdvancedTextCompressor()
             compressed_content, metadata = compressor.ultra_compress(text_content)
             
@@ -1969,313 +2278,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
 else:
     initialize_system()
-    application = app chunk immediately
-                        compressed_chunk, metadata = self.compressor.ultra_compress(chunk_text)
-                        
-                        chunk_info = {
-                            'compressed_data': compressed_chunk,
-                            'metadata': metadata,
-                            'page_range': f"{start_page + 1}-{end_page}",
-                            'chunk_index': len(compressed_chunks)
-                        }
-                        
-                        compressed_chunks.append(chunk_info)
-                        
-                        # Update stats
-                        total_original_size += metadata['original_size']
-                        total_compressed_size += metadata['compressed_size']
-                        total_pages += (end_page - start_page)
-                        
-                        # Extract authors from first chunk
-                        if len(compressed_chunks) == 1:
-                            chunk_authors = extract_authors_from_text(chunk_text, os.path.basename(file_path))
-                            authors.update(chunk_authors)
-                    
-                    # Memory management
-                    if len(compressed_chunks) % 4 == 0:  # Every 4 chunks
-                        gc.collect()
-                        print(f"  Processed {end_page}/{total_pdf_pages} pages...")
-            
-            overall_compression = (1 - total_compressed_size / total_original_size) * 100 if total_original_size > 0 else 0
-            
-            result = {
-                'success': True,
-                'compressed_chunks': compressed_chunks,
-                'total_chunks': len(compressed_chunks),
-                'total_pages': total_pages,
-                'original_size': total_original_size,
-                'compressed_size': total_compressed_size,
-                'compression_ratio': round(overall_compression, 1),
-                'file_size_mb': round(file_size_mb, 2),
-                'extracted_authors': list(authors),
-                'processing_method': 'streaming_ultra_compressed'
-            }
-            
-            print(f"✅ Streaming processing complete: {total_original_size:,} → {total_compressed_size:,} bytes ({overall_compression:.1f}% compression)")
-            
-            return result
-            
-        except Exception as e:
-            error_msg = f"Streaming processing failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            return {"error": error_msg}
-        finally:
-            gc.collect()
-    
-    def _extract_chunk_text(self, pdf, start_page: int, end_page: int) -> str:
-        """Extract text from a chunk of PDF pages"""
-        chunk_text = ""
-        
-        for page_num in range(start_page, end_page):
-            try:
-                page = pdf.pages[page_num]
-                page_text = page.extract_text()
-                if page_text:
-                    chunk_text += f"\n--- Page {page_num + 1} ---\n"
-                    chunk_text += page_text.strip() + "\n"
-            except Exception as e:
-                print(f"  ⚠️ Error extracting page {page_num + 1}: {e}")
-                continue
-        
-        return chunk_text
-
-# ================================
-# MEMORY-EFFICIENT PDF PROCESSING
-# ================================
-
-def extract_text_from_pdf_efficient(file_path, max_size_mb=100):
-    """Memory-efficient PDF extraction with size limits"""
-    try:
-        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
-        
-        if file_size > max_size_mb:
-            return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
-        
-        text_content = ""
-        page_count = 0
-        
-        with pdfplumber.open(file_path) as pdf:
-            total_pages = len(pdf.pages)
-            print(f"PDF has {total_pages} pages")
-            
-            for page_num, page in enumerate(pdf.pages):
-                try:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_content += f"\n--- Page {page_num + 1} ---\n"
-                        text_content += page_text.strip() + "\n"
-                        page_count += 1
-                    
-                    # Memory management: collect garbage every 25 pages
-                    if page_num % 25 == 0:
-                        gc.collect()
-                        
-                    # Progress indication for large files
-                    if page_num % 50 == 0 and page_num > 0:
-                        print(f"Processed {page_num}/{total_pages} pages...")
-                        
-                except Exception as e:
-                    print(f"Error extracting page {page_num + 1}: {e}")
-                    continue
-        
-        if not text_content.strip():
-            return f"No text could be extracted from {os.path.basename(file_path)}"
-        
-        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
-        return text_content
-        
-    except Exception as e:
-        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg
-    finally:
-        # Force garbage collection
-        gc.collect()
-
-def extract_authors_from_text(text, filename):
-    """Extract author names from PDF text and filename"""
-    authors = set()
-    
-    # Common author extraction patterns
-    author_patterns = [
-        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[-–—]\s*",
-        r"Author[s]?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
-    ]
-    
-    # Extract from filename
-    filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
-    if filename_match:
-        potential_author = filename_match.group(1).strip()
-        if len(potential_author.split()) >= 2:
-            authors.add(potential_author.title())
-    
-    # Extract from text content (first 3000 chars for efficiency)
-    search_text = text[:3000] if len(text) > 3000 else text
-    for pattern in author_patterns:
-        matches = re.findall(pattern, search_text)
-        for match in matches:
-            if len(match.split()) >= 2:
-                authors.add(match.strip())
-    
-    return list(authors)
-
-# ================================
-# KNOWLEDGE BASE SYSTEM
-# ================================
-
-def load_knowledge_base():
-    """Load admin knowledge base with fallback"""
-    try:
-        if os.path.exists(KNOWLEDGE_BASE_FILE):
-            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading knowledge base: {e}")
-    
-    return {
-        "documents": [],
-        "authorized_authors": [],
-        "last_updated": None,
-        "total_documents": 0,
-        "total_characters": 0
-    }
-
-def save_knowledge_base(knowledge_base):
-    """Save admin knowledge base with metadata"""
-    try:
-        knowledge_base["last_updated"] = datetime.now().isoformat()
-        knowledge_base["total_documents"] = len(knowledge_base["documents"])
-        
-        # Calculate total characters from both compressed and uncompressed docs
-        total_chars = 0
-        for doc in knowledge_base["documents"]:
-            if doc.get("content_type") == "streaming_ultra_compressed":
-                total_chars += doc.get("character_count", 0)
-            elif doc.get("content_type") == "ultra_compressed":
-                total_chars += doc.get("character_count", 0)
-            else:
-                total_chars += len(doc.get("content", ""))
-        
-        knowledge_base["total_characters"] = total_chars
-        
-        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
-            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
-            
-        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
-    except Exception as e:
-        print(f"❌ Error saving knowledge base: {e}")
-
-def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to admin knowledge base with database tracking (legacy method)"""
-    try:
-        # Extract text efficiently
-        text_content = extract_text_from_pdf_efficient(file_path)
-        
-        if "Error" in text_content or "too large" in text_content:
-            return {"error": text_content}
-        
-        # Extract authors
-        extracted_authors = extract_authors_from_text(text_content, filename)
-        
-        # Create document info
-        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-        doc_id = str(uuid.uuid4())
-        
-        doc_info = {
-            "id": doc_id,
-            "filename": filename,
-            "content": text_content,
-            "added_date": datetime.now().isoformat(),
-            "file_hash": file_hash,
-            "is_core": is_core,
-            "character_count": len(text_content),
-            "type": "admin_therapeutic_resource",
-            "extracted_authors": extracted_authors,
-            "pdf_extraction_status": "success"
-        }
-        
-        # Add to knowledge base
-        knowledge_base = load_knowledge_base()
-        knowledge_base["documents"].append(doc_info)
-        
-        # Update authorized authors
-        if "authorized_authors" not in knowledge_base:
-            knowledge_base["authorized_authors"] = []
-        
-        for author in extracted_authors:
-            if author not in knowledge_base["authorized_authors"]:
-                knowledge_base["authorized_authors"].append(author)
-                print(f"✅ Added authorized author: {author}")
-        
-        save_knowledge_base(knowledge_base)
-        
-        # Track in database
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT INTO knowledge_base_docs 
-                (id, filename, file_hash, character_count, extracted_authors)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
-            conn.commit()
-        
-        print(f"✅ Added {filename} to knowledge base ({len(text_content)} characters)")
-        return doc_info
-        
-    except Exception as e:
-        error_msg = f"Error adding document: {str(e)}"
-        print(f"❌ {error_msg}")
-        return {"error": error_msg}
-    finally:
-        gc.collect()
-
-def add_document_compressed(file_path, filename, is_core=True):
-    """
-    Add document with compression and smart storage
-    Reduces memory usage by 70-90%
-    """
-    try:
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        print(f"📊 Processing: {filename} ({file_size_mb:.1f}MB)")
-        
-        # Use streaming processor for large files
-        if file_size_mb > 25:
-            processor = StreamingPDFProcessor()
-            result = processor.process_large_pdf_streaming(file_path)
-            
-            if not result.get('success'):
-                return {"error": result.get('error', 'Processing failed')}
-            
-            # Create document info for streaming result
-            file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-            doc_id = str(uuid.uuid4())
-            
-            doc_info = {
-                "id": doc_id,
-                "filename": filename,
-                "content_type": "streaming_ultra_compressed",
-                "compressed_chunks": result['compressed_chunks'],
-                "total_chunks": result['total_chunks'],
-                "added_date": datetime.now().isoformat(),
-                "file_hash": file_hash,
-                "is_core": is_core,
-                "character_count": result['original_size'],
-                "compressed_size": result['compressed_size'],
-                "compression_ratio": result['compression_ratio'],
-                "total_pages": result['total_pages'],
-                "file_size_mb": result['file_size_mb'],
-                "type": "admin_therapeutic_resource",
-                "extracted_authors": result['extracted_authors'],
-                "pdf_extraction_status": "success_streaming_compressed",
-                "processing_method": result['processing_method']
-            }
-        else:
-            # Use regular processing for smaller files with compression
-            text_content = extract_text_from_pdf_efficient(file_path)
-            
-            if "Error" in text_content or "too large" in text_content:
-                return {"error": text_content}
-            
-            # Compress
+    application = app
