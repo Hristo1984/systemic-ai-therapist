@@ -2225,7 +2225,7 @@ else:
     print(f"✅ Personal file saved to: {file_path}")
             
             # Check if file actually exists
-            if os.path.exists(file_path):
+                if os.path.exists(file_path):
                 actual_file_size = os.path.getsize(file_path)
                 print(f"✅ File confirmed saved. Size: {actual_file_size} bytes")
                 if actual_file_size != file_size:
