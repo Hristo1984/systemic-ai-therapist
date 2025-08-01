@@ -1454,12 +1454,12 @@ def chat():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# ENHANCED UPLOAD ROUTE WITH DEBUG
+# FIXED UPLOAD ROUTE
 # ================================
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """File upload endpoint with enhanced debugging - supports both authenticated and anonymous users"""
+    """File upload endpoint - FIXED VERSION"""
     print(f"🔍 UPLOAD START - Method: {request.method}")
     print(f"🔍 Content type: {request.content_type}")
     print(f"🔍 Files received: {list(request.files.keys())}")
@@ -1473,7 +1473,6 @@ def upload():
         
         user_id = user['id']
         print(f"🔍 User ID: {user_id}")
-        print(f"🔍 User info: {user}")
         
         if "pdf" not in request.files:
             print("❌ No PDF in request.files")
@@ -1482,7 +1481,6 @@ def upload():
         file = request.files["pdf"]
         print(f"🔍 File object: {file}")
         print(f"🔍 File filename: {file.filename}")
-        print(f"🔍 File content type: {file.content_type}")
         
         if not file or not file.filename:
             print("❌ No file or filename")
@@ -1498,6 +1496,7 @@ def upload():
         print(f"🔍 Use streaming: {use_streaming}")
         
         if upload_type == "admin":
+            # ADMIN UPLOAD
             if not is_admin_user():
                 print("❌ Not admin user")
                 return jsonify({
@@ -1507,7 +1506,7 @@ def upload():
             
             print("🔍 Admin upload - saving file...")
             file_path = os.path.join(UPLOADS_DIR, file.filename)
-            print(f"🔍 File path: {file_path}")
+            print(f"🔍 Admin file path: {file_path}")
             
             # Ensure directory exists
             os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -1518,6 +1517,51 @@ def upload():
             file_size = file.tell()
             file.seek(0)  # Reset to beginning
             print(f"🔍 File size: {file_size} bytes ({file_size / 1024 / 1024:.1f}MB)")
+            
+            file.save(file_path)
+            print(f"✅ Admin file saved to: {file_path}")
+            
+            # Choose processing method
+            if use_streaming or file_size > 25 * 1024 * 1024:  # 25MB threshold
+                print("🔍 Using compressed processing method")
+                doc_info = add_document_compressed(file_path, file.filename, is_core=True)
+            else:
+                print("🔍 Using legacy processing method")
+                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
+            
+            print(f"🔍 Admin document processing result: {doc_info}")
+            
+            if "error" in doc_info:
+                print(f"❌ Admin document processing error: {doc_info['error']}")
+                return jsonify({"message": doc_info["error"], "success": False})
+            
+            # Clean up uploaded file
+            try:
+                os.remove(file_path)
+                print(f"🔍 Cleaned up admin temp file: {file_path}")
+            except Exception as e:
+                print(f"⚠️ Could not remove admin temp file: {e}")
+            
+            authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
+            compression_text = f" | {doc_info.get('compression_ratio', 0)}% compression" if doc_info.get('compression_ratio', 0) > 0 else ""
+            
+            return jsonify({
+                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){compression_text}{authors_text}", 
+                "success": True,
+                "type": "admin",
+                "extracted_authors": doc_info['extracted_authors'],
+                "compression_ratio": doc_info.get('compression_ratio', 0)
+            })
+        
+        else:
+            # PERSONAL UPLOAD
+            print("🔍 Personal document upload")
+            file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
+            print(f"🔍 Personal file path: {file_path}")
+            
+            # Ensure directory exists
+            os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
+            print(f"🔍 User uploads directory created/verified: {USER_UPLOADS_DIR}")
             
             file.save(file_path)
             print(f"✅ Personal file saved to: {file_path}")
@@ -2222,62 +2266,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
 else:
     initialize_system()
-    print(f"✅ Personal file saved to: {file_path}")
-            
-            # Check if file actually exists
-                if os.path.exists(file_path):
-                actual_file_size = os.path.getsize(file_path)
-                print(f"✅ File confirmed saved. Size: {actual_file_size} bytes")
-                if actual_file_size != file_size:
-                    print(f"⚠️ Size mismatch! Expected: {file_size}, Actual: {actual_file_size}")
-            else:
-                print("❌ File not found after save!")
-                return jsonify({"message": "File save failed", "success": False})
-            
-            print("🔍 Starting document processing...")
-            
-            # Choose processing method
-            if use_streaming or file_size > 25 * 1024 * 1024:  # 25MB threshold
-                print("🔍 Using compressed processing method")
-                doc_info = add_document_compressed(file_path, file.filename, is_core=True)
-            else:
-                print("🔍 Using legacy processing method")
-                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
-            
-            print(f"🔍 Document processing result: {doc_info}")
-            
-            if "error" in doc_info:
-                print(f"❌ Document processing error: {doc_info['error']}")
-                return jsonify({"message": doc_info["error"], "success": False})
-            
-            print("✅ Upload completed successfully!")
-            
-            # Clean up uploaded file
-            try:
-                os.remove(file_path)
-                print(f"🔍 Cleaned up temporary file: {file_path}")
-            except Exception as e:
-                print(f"⚠️ Could not remove temp file: {e}")
-            
-            authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
-            compression_text = f" | {doc_info.get('compression_ratio', 0)}% compression" if doc_info.get('compression_ratio', 0) > 0 else ""
-            
-            return jsonify({
-                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){compression_text}{authors_text}", 
-                "success": True,
-                "type": "admin",
-                "extracted_authors": doc_info['extracted_authors'],
-                "compression_ratio": doc_info.get('compression_ratio', 0)
-            })
-        else:
-            print("🔍 Personal document upload")
-            # User personal document
-            file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
-            print(f"🔍 Personal file path: {file_path}")
-            
-            # Ensure directory exists
-            os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
-            print(f"🔍 User uploads directory created/verified: {USER_UPLOADS_DIR}")
-            
-            file.save(file_path)
-            print(f"✅ Personal file saved to: {file_path}")
+    application = app
