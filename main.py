@@ -1,4 +1,4 @@
-def add_personal_document_persistent(file_patimport os
+import os
 import json
 import requests
 import hashlib
@@ -826,8 +826,8 @@ def add_document_compressed(file_path, filename, is_core=True):
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
         print(f"📊 Processing: {filename} ({file_size_mb:.1f}MB)")
         
-        # Use streaming processor for large files
-        if file_size_mb > 25:
+        # Use streaming processor for very large files on Standard tier
+        if file_size_mb > 50:  # Threshold for streaming (increased from 25MB)
             processor = StreamingPDFProcessor()
             result = processor.process_large_pdf_streaming(file_path)
             
@@ -981,7 +981,7 @@ def retrieve_compressed_content(doc_info: Dict, max_chars: int = 5000) -> str:
 def add_personal_document_persistent(file_path, filename, user_id):
     """Add document to user's persistent personal collection"""
     try:
-        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=50)
+        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=100)  # Increased for Standard tier
         
         if "Error" in text_content or "too large" in text_content:
             return {"error": text_content}
@@ -1586,8 +1586,8 @@ def upload():
             file.save(file_path)
             print(f"✅ Admin file saved to: {file_path}")
             
-            # Choose processing method based on size
-            if use_streaming or file_size_mb > 25:  # 25MB threshold
+            # Choose processing method based on size (Standard tier thresholds)
+            if use_streaming or file_size_mb > 50:  # 50MB threshold for Standard tier
                 print("🔍 Using compressed processing method")
                 doc_info = add_document_compressed(file_path, file.filename, is_core=True)
             else:
@@ -1920,9 +1920,10 @@ def health():
             "memory_info": {
                 "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
                 "database_file": DATABASE_FILE,
-                "pdf_max_size_mb": 100,
+                "pdf_max_size_mb": 200,
                 "compression_enabled": True,
-                "memory_limit_mb": 512
+                "memory_limit_mb": 2048,
+                "tier": "standard"
             }
         })
     except Exception as e:
@@ -2208,12 +2209,12 @@ def initialize_system_safe():
     gc.collect()
     
     print("✅ Memory-safe Therapeutic AI initialized!")
-    print("🎯 Safety features active:")
-    print("   - 512MB memory limit")
-    print("   - 50MB PDF limit for personal uploads")
-    print("   - 100MB PDF limit for admin uploads")
-    print("   - 200 page limit per PDF")
-    print("   - Aggressive garbage collection")
+    print("🎯 Safety features active for Standard tier:")
+    print("   - 2GB memory limit")
+    print("   - 100MB PDF limit for personal uploads")
+    print("   - 200MB PDF limit for admin uploads")
+    print("   - 500 page limit per PDF")
+    print("   - Optimized garbage collection")
     print("   - Enhanced error handling")
 
 # ================================
