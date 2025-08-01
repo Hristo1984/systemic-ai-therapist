@@ -59,6 +59,5 @@ def worker_abort(worker):
 raw_env = [
     'PYTHONOPTIMIZE=1',
     'PYTHONDONTWRITEBYTECODE=1',
-    'PYTHONUNBUFFERED=1',
-]
+    'PYTHONUNBUFFERED=1'
 ]
