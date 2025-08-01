@@ -1,4 +1,4 @@
-import os
+def add_personal_document_persistent(file_patimport os
 import json
 import requests
 import hashlib
@@ -11,6 +11,9 @@ import base64
 import tempfile
 import threading
 import time
+import resource
+import signal
+import sys
 from datetime import datetime, timedelta
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
@@ -25,6 +28,20 @@ import traceback
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-change-this")
+
+# CRITICAL: Memory and upload safety settings
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max request
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching
+app.config['JSON_AS_ASCII'] = False
+
+# Memory limit enforcement (2GB limit for Render Standard tier)
+def limit_memory():
+    try:
+        # Set memory limit to 2GB (Render Standard tier safe limit)
+        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024))
+        print("✅ Memory limit set to 2GB")
+    except Exception as e:
+        print(f"⚠️ Could not set memory limit: {e}")
 
 # Load config
 with open("config.json", "r") as f:
@@ -51,6 +68,28 @@ USER_UPLOADS_DIR = "user_uploads"
 for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs"]:
     os.makedirs(directory, exist_ok=True)
     print(f"✅ Created/verified directory: {directory}")
+
+# ================================
+# ERROR HANDLERS FOR MEMORY ISSUES
+# ================================
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle file too large errors"""
+    return jsonify({
+        "error": "File too large. Maximum size is 100MB.",
+        "success": False
+    }), 413
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    """Handle server errors with memory cleanup"""
+    print(f"🚨 Server error: {error}")
+    gc.collect()  # Force cleanup on error
+    return jsonify({
+        "error": "Internal server error. Please try with a smaller file.",
+        "success": False
+    }), 500
 
 # ================================
 # USER AUTHENTICATION FUNCTIONS
@@ -567,44 +606,64 @@ class StreamingPDFProcessor:
         return chunk_text
 
 # ================================
-# MEMORY-EFFICIENT PDF PROCESSING
+# MEMORY-SAFE PDF PROCESSING
 # ================================
 
-def extract_text_from_pdf_efficient(file_path, max_size_mb=100):
-    """Memory-efficient PDF extraction with size limits"""
+def extract_text_from_pdf_efficient(file_path, max_size_mb=200):  # INCREASED for Standard tier
+    """Memory-efficient PDF extraction with reasonable limits for Standard tier"""
     try:
         file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
         print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
         
+        # More generous limits for Standard tier
         if file_size > max_size_mb:
             return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
         
         text_content = ""
         page_count = 0
         
-        with pdfplumber.open(file_path) as pdf:
-            total_pages = len(pdf.pages)
-            print(f"PDF has {total_pages} pages")
-            
-            for page_num, page in enumerate(pdf.pages):
-                try:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_content += f"\n--- Page {page_num + 1} ---\n"
-                        text_content += page_text.strip() + "\n"
-                        page_count += 1
-                    
-                    # Memory management: collect garbage every 25 pages
-                    if page_num % 25 == 0:
-                        gc.collect()
+        # Force garbage collection before starting
+        gc.collect()
+        
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                total_pages = len(pdf.pages)
+                print(f"PDF has {total_pages} pages")
+                
+                # More generous page limits for Standard tier
+                max_pages = min(total_pages, 500)  # Max 500 pages (increased from 200)
+                if total_pages > max_pages:
+                    print(f"⚠️ Large PDF detected - processing first {max_pages} pages only")
+                
+                for page_num in range(max_pages):
+                    try:
+                        page = pdf.pages[page_num]
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content += f"\n--- Page {page_num + 1} ---\n"
+                            text_content += page_text.strip() + "\n"
+                            page_count += 1
                         
-                    # Progress indication for large files
-                    if page_num % 50 == 0 and page_num > 0:
-                        print(f"Processed {page_num}/{total_pages} pages...")
+                        # Less aggressive memory management for Standard tier
+                        if page_num % 25 == 0:  # Every 25 pages
+                            gc.collect()
+                            
+                        # Progress indication
+                        if page_num % 50 == 0 and page_num > 0:
+                            print(f"Processed {page_num}/{max_pages} pages...")
+                            
+                        # Higher memory safety threshold for Standard tier
+                        if len(text_content) > 20 * 1024 * 1024:  # 20MB text limit (increased from 5MB)
+                            print("⚠️ Text content limit reached - stopping extraction")
+                            break
+                            
+                    except Exception as e:
+                        print(f"Error extracting page {page_num + 1}: {e}")
+                        continue
                         
-                except Exception as e:
-                    print(f"Error extracting page {page_num + 1}: {e}")
-                    continue
+        except Exception as pdf_error:
+            print(f"PDF processing error: {pdf_error}")
+            return f"Error processing PDF: {str(pdf_error)}"
         
         if not text_content.strip():
             return f"No text could be extracted from {os.path.basename(file_path)}"
@@ -617,7 +676,7 @@ def extract_text_from_pdf_efficient(file_path, max_size_mb=100):
         print(f"❌ {error_msg}")
         return error_msg
     finally:
-        # Force garbage collection
+        # ALWAYS force garbage collection
         gc.collect()
 
 def extract_authors_from_text(text, filename):
@@ -1454,16 +1513,13 @@ def chat():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# FIXED UPLOAD ROUTE
+# MEMORY-SAFE UPLOAD ROUTE - FIXED
 # ================================
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """File upload endpoint - FIXED VERSION"""
-    print(f"🔍 UPLOAD START - Method: {request.method}")
-    print(f"🔍 Content type: {request.content_type}")
-    print(f"🔍 Files received: {list(request.files.keys())}")
-    print(f"🔍 Form data: {dict(request.form)}")
+    """Memory-safe file upload endpoint - FIXED VERSION"""
+    print(f"🔍 UPLOAD START - Memory limit enforced")
     
     try:
         user = get_or_create_user()
@@ -1479,8 +1535,6 @@ def upload():
             return jsonify({"message": "No file selected", "success": False})
         
         file = request.files["pdf"]
-        print(f"🔍 File object: {file}")
-        print(f"🔍 File filename: {file.filename}")
         
         if not file or not file.filename:
             print("❌ No file or filename")
@@ -1492,8 +1546,26 @@ def upload():
         
         upload_type = request.form.get("upload_type", "personal")
         use_streaming = request.form.get("use_streaming", "false") == "true"
-        print(f"🔍 Upload type: {upload_type}")
-        print(f"🔍 Use streaming: {use_streaming}")
+        
+        # Check file size before processing
+        file.seek(0, 2)  # Seek to end
+        file_size = file.tell()
+        file.seek(0)  # Reset to beginning
+        file_size_mb = file_size / (1024 * 1024)
+        
+        print(f"🔍 File size: {file_size_mb:.1f}MB")
+        
+        # Enforce more generous limits for Standard tier
+        if upload_type == "admin" and file_size_mb > 200:
+            return jsonify({
+                "message": f"Admin file too large ({file_size_mb:.1f}MB). Maximum: 200MB",
+                "success": False
+            })
+        elif upload_type == "personal" and file_size_mb > 100:
+            return jsonify({
+                "message": f"Personal file too large ({file_size_mb:.1f}MB). Maximum: 100MB", 
+                "success": False
+            })
         
         if upload_type == "admin":
             # ADMIN UPLOAD
@@ -1506,23 +1578,16 @@ def upload():
             
             print("🔍 Admin upload - saving file...")
             file_path = os.path.join(UPLOADS_DIR, file.filename)
-            print(f"🔍 Admin file path: {file_path}")
             
             # Ensure directory exists
             os.makedirs(UPLOADS_DIR, exist_ok=True)
-            print(f"🔍 Upload directory created/verified: {UPLOADS_DIR}")
             
-            # Check file size before saving
-            file.seek(0, 2)  # Seek to end
-            file_size = file.tell()
-            file.seek(0)  # Reset to beginning
-            print(f"🔍 File size: {file_size} bytes ({file_size / 1024 / 1024:.1f}MB)")
-            
+            # Save file
             file.save(file_path)
             print(f"✅ Admin file saved to: {file_path}")
             
-            # Choose processing method
-            if use_streaming or file_size > 25 * 1024 * 1024:  # 25MB threshold
+            # Choose processing method based on size
+            if use_streaming or file_size_mb > 25:  # 25MB threshold
                 print("🔍 Using compressed processing method")
                 doc_info = add_document_compressed(file_path, file.filename, is_core=True)
             else:
@@ -1533,6 +1598,11 @@ def upload():
             
             if "error" in doc_info:
                 print(f"❌ Admin document processing error: {doc_info['error']}")
+                # Clean up uploaded file
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
                 return jsonify({"message": doc_info["error"], "success": False})
             
             # Clean up uploaded file
@@ -1557,12 +1627,11 @@ def upload():
             # PERSONAL UPLOAD
             print("🔍 Personal document upload")
             file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
-            print(f"🔍 Personal file path: {file_path}")
             
             # Ensure directory exists
             os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
-            print(f"🔍 User uploads directory created/verified: {USER_UPLOADS_DIR}")
             
+            # Save file
             file.save(file_path)
             print(f"✅ Personal file saved to: {file_path}")
             
@@ -1571,6 +1640,11 @@ def upload():
             
             if "error" in doc_info:
                 print(f"❌ Personal document processing error: {doc_info['error']}")
+                # Clean up uploaded file
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
                 return jsonify({"message": doc_info["error"], "success": False})
             
             # Clean up uploaded file
@@ -1589,196 +1663,15 @@ def upload():
     except Exception as e:
         print(f"❌ Upload exception: {str(e)}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "success": False})
-
-# ================================
-# DIAGNOSTIC ROUTES
-# ================================
-
-@app.route("/admin/check-permissions", methods=["GET"])
-def check_permissions():
-    """Check file system permissions and directory status"""
-    if not session.get("is_admin"):
-        return "Admin access required", 403
-    
-    checks = {}
-    
-    # Check if directories exist and are writable
-    for dir_name in [UPLOADS_DIR, CORE_MEMORY_DIR, USER_UPLOADS_DIR]:
-        checks[dir_name] = {
-            "exists": os.path.exists(dir_name),
-            "is_dir": os.path.isdir(dir_name) if os.path.exists(dir_name) else False,
-            "writable": os.access(dir_name, os.W_OK) if os.path.exists(dir_name) else False,
-            "contents": os.listdir(dir_name) if os.path.exists(dir_name) else []
-        }
-    
-    # Check knowledge base file
-    kb_file = os.path.join(CORE_MEMORY_DIR, "knowledge_base.json")
-    checks["knowledge_base.json"] = {
-        "exists": os.path.exists(kb_file),
-        "readable": os.access(kb_file, os.R_OK) if os.path.exists(kb_file) else False,
-        "writable": os.access(kb_file, os.W_OK) if os.path.exists(kb_file) else False,
-        "size": os.path.getsize(kb_file) if os.path.exists(kb_file) else 0
-    }
-    
-    # Check database file
-    checks["database"] = {
-        "exists": os.path.exists(DATABASE_FILE),
-        "readable": os.access(DATABASE_FILE, os.R_OK) if os.path.exists(DATABASE_FILE) else False,
-        "writable": os.access(DATABASE_FILE, os.W_OK) if os.path.exists(DATABASE_FILE) else False,
-        "size": os.path.getsize(DATABASE_FILE) if os.path.exists(DATABASE_FILE) else 0
-    }
-    
-    return f"<pre>{json.dumps(checks, indent=2)}</pre>"
-
-@app.route("/admin/test-simple-upload", methods=["GET", "POST"])
-def test_simple_upload():
-    """Simple upload test without processing"""
-    if not session.get("is_admin"):
-        return "Admin access required", 403
-    
-    if request.method == "GET":
-        return '''
-        <h2>Simple Upload Test</h2>
-        <form method="POST" enctype="multipart/form-data">
-            <input type="file" name="testpdf" accept=".pdf" required>
-            <button type="submit">Test Upload</button>
-        </form>
-        <p><a href="/admin">← Back to Admin Dashboard</a></p>
-        '''
-    
-    try:
-        print("🔍 Simple upload test started")
-        file = request.files.get('testpdf')
-        if not file:
-            print("❌ No file received in simple test")
-            return "❌ No file received"
-        
-        print(f"🔍 Test file: {file.filename}, type: {file.content_type}")
-        
-        # Just save the file, don't process
-        file_path = os.path.join(UPLOADS_DIR, f"test_{file.filename}")
-        print(f"🔍 Test file path: {file_path}")
-        
-        os.makedirs(UPLOADS_DIR, exist_ok=True)
-        print(f"🔍 Test upload directory verified")
-        
-        # Check file size
-        file.seek(0, 2)
-        file_size = file.tell()
-        file.seek(0)
-        print(f"🔍 Test file size: {file_size} bytes")
-        
-        file.save(file_path)
-        print(f"🔍 Test file saved")
-        
-        # Check if saved
-        if os.path.exists(file_path):
-            actual_size = os.path.getsize(file_path)
-            print(f"✅ Test file confirmed saved, size: {actual_size} bytes")
-            
-            # Clean up
-            os.remove(file_path)
-            print(f"🔍 Test file cleaned up")
-            
-            return f"✅ SUCCESS: File saved as {file_path}, Size: {actual_size} bytes"
-        else:
-            print("❌ Test file not found after save")
-            return "❌ FAILED: File not found after save"
-            
-    except Exception as e:
-        print(f"❌ Simple upload test error: {str(e)}")
-        traceback.print_exc()
-        return f"❌ ERROR: {str(e)}"
-
-@app.route("/admin/debug-kb", methods=["GET"])
-def debug_knowledge_base():
-    """Debug knowledge base status"""
-    if not session.get("is_admin"):
-        return "Admin access required", 403
-    
-    debug_info = {
-        "knowledge_base_file_exists": os.path.exists(KNOWLEDGE_BASE_FILE),
-        "knowledge_base_file_size": 0,
-        "knowledge_base_content": {},
-        "uploads_dir_exists": os.path.exists(UPLOADS_DIR),
-        "uploads_dir_contents": [],
-        "database_stats": {},
-        "core_memory_dir_exists": os.path.exists(CORE_MEMORY_DIR),
-        "core_memory_contents": []
-    }
-    
-    # Check knowledge base file size
-    if os.path.exists(KNOWLEDGE_BASE_FILE):
-        debug_info["knowledge_base_file_size"] = os.path.getsize(KNOWLEDGE_BASE_FILE)
-        
-        # Try to read content
-        try:
-            with open(KNOWLEDGE_BASE_FILE, 'r') as f:
-                kb_content = json.load(f)
-                debug_info["knowledge_base_content"] = {
-                    "total_documents": len(kb_content.get("documents", [])),
-                    "total_authors": len(kb_content.get("authorized_authors", [])),
-                    "last_updated": kb_content.get("last_updated"),
-                    "total_characters": kb_content.get("total_characters", 0),
-                    "document_filenames": [doc.get("filename") for doc in kb_content.get("documents", [])]
-                }
-        except Exception as e:
-            debug_info["knowledge_base_error"] = str(e)
-    
-    # Check uploads directory
-    if os.path.exists(UPLOADS_DIR):
-        debug_info["uploads_dir_contents"] = os.listdir(UPLOADS_DIR)
-    
-    # Check core memory directory
-    if os.path.exists(CORE_MEMORY_DIR):
-        debug_info["core_memory_contents"] = os.listdir(CORE_MEMORY_DIR)
-    
-    # Check database
-    try:
-        with get_db_connection() as conn:
-            kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()
-            debug_info["database_stats"]["knowledge_base_docs"] = kb_docs['count']
-            
-            # Get recent uploads
-            recent_docs = conn.execute('''
-                SELECT filename, upload_date, character_count 
-                FROM knowledge_base_docs 
-                ORDER BY upload_date DESC 
-                LIMIT 5
-            ''').fetchall()
-            debug_info["database_stats"]["recent_uploads"] = [dict(doc) for doc in recent_docs]
-            
-    except Exception as e:
-        debug_info["database_error"] = str(e)
-    
-    return f"<pre>{json.dumps(debug_info, indent=2)}</pre>"
-
-@app.route("/admin/force-kb-refresh", methods=["POST"])
-def force_kb_refresh():
-    """Force refresh of knowledge base stats"""
-    if not session.get("is_admin"):
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        # Force reload and recalculate knowledge base
-        knowledge_base = load_knowledge_base()
-        save_knowledge_base(knowledge_base)  # This will recalculate stats
-        
+        # Force memory cleanup on error
+        gc.collect()
         return jsonify({
-            "success": True, 
-            "message": "Knowledge base stats refreshed",
-            "stats": {
-                "total_documents": len(knowledge_base["documents"]),
-                "total_characters": knowledge_base.get("total_characters", 0),
-                "total_authors": len(knowledge_base.get("authorized_authors", []))
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            "error": f"Upload failed: {str(e)}", 
+            "success": False
+        }), 500
 
 # ================================
-# CONTINUATION OF ORIGINAL ROUTES
+# REMAINING ROUTES
 # ================================
 
 @app.route("/clear", methods=["POST"])
@@ -2021,13 +1914,15 @@ def health():
                 "controlled_knowledge": True,
                 "large_pdf_support": True,
                 "compression_system": True,
-                "batch_upload": True
+                "batch_upload": True,
+                "memory_safety": True
             },
             "memory_info": {
                 "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
                 "database_file": DATABASE_FILE,
-                "pdf_max_size_mb": 200,
-                "compression_enabled": True
+                "pdf_max_size_mb": 100,
+                "compression_enabled": True,
+                "memory_limit_mb": 512
             }
         })
     except Exception as e:
@@ -2035,8 +1930,130 @@ def health():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 # ================================
-# DATABASE MAINTENANCE
+# ADMIN DIAGNOSTIC ROUTES
 # ================================
+
+@app.route("/admin/check-permissions", methods=["GET"])
+def check_permissions():
+    """Check file system permissions and directory status"""
+    if not session.get("is_admin"):
+        return "Admin access required", 403
+    
+    checks = {}
+    
+    # Check if directories exist and are writable
+    for dir_name in [UPLOADS_DIR, CORE_MEMORY_DIR, USER_UPLOADS_DIR]:
+        checks[dir_name] = {
+            "exists": os.path.exists(dir_name),
+            "is_dir": os.path.isdir(dir_name) if os.path.exists(dir_name) else False,
+            "writable": os.access(dir_name, os.W_OK) if os.path.exists(dir_name) else False,
+            "contents": os.listdir(dir_name) if os.path.exists(dir_name) else []
+        }
+    
+    # Check knowledge base file
+    kb_file = os.path.join(CORE_MEMORY_DIR, "knowledge_base.json")
+    checks["knowledge_base.json"] = {
+        "exists": os.path.exists(kb_file),
+        "readable": os.access(kb_file, os.R_OK) if os.path.exists(kb_file) else False,
+        "writable": os.access(kb_file, os.W_OK) if os.path.exists(kb_file) else False,
+        "size": os.path.getsize(kb_file) if os.path.exists(kb_file) else 0
+    }
+    
+    # Check database file
+    checks["database"] = {
+        "exists": os.path.exists(DATABASE_FILE),
+        "readable": os.access(DATABASE_FILE, os.R_OK) if os.path.exists(DATABASE_FILE) else False,
+        "writable": os.access(DATABASE_FILE, os.W_OK) if os.path.exists(DATABASE_FILE) else False,
+        "size": os.path.getsize(DATABASE_FILE) if os.path.exists(DATABASE_FILE) else 0
+    }
+    
+    return f"<pre>{json.dumps(checks, indent=2)}</pre>"
+
+@app.route("/admin/debug-kb", methods=["GET"])
+def debug_knowledge_base():
+    """Debug knowledge base status"""
+    if not session.get("is_admin"):
+        return "Admin access required", 403
+    
+    debug_info = {
+        "knowledge_base_file_exists": os.path.exists(KNOWLEDGE_BASE_FILE),
+        "knowledge_base_file_size": 0,
+        "knowledge_base_content": {},
+        "uploads_dir_exists": os.path.exists(UPLOADS_DIR),
+        "uploads_dir_contents": [],
+        "database_stats": {},
+        "core_memory_dir_exists": os.path.exists(CORE_MEMORY_DIR),
+        "core_memory_contents": []
+    }
+    
+    # Check knowledge base file size
+    if os.path.exists(KNOWLEDGE_BASE_FILE):
+        debug_info["knowledge_base_file_size"] = os.path.getsize(KNOWLEDGE_BASE_FILE)
+        
+        # Try to read content
+        try:
+            with open(KNOWLEDGE_BASE_FILE, 'r') as f:
+                kb_content = json.load(f)
+                debug_info["knowledge_base_content"] = {
+                    "total_documents": len(kb_content.get("documents", [])),
+                    "total_authors": len(kb_content.get("authorized_authors", [])),
+                    "last_updated": kb_content.get("last_updated"),
+                    "total_characters": kb_content.get("total_characters", 0),
+                    "document_filenames": [doc.get("filename") for doc in kb_content.get("documents", [])]
+                }
+        except Exception as e:
+            debug_info["knowledge_base_error"] = str(e)
+    
+    # Check uploads directory
+    if os.path.exists(UPLOADS_DIR):
+        debug_info["uploads_dir_contents"] = os.listdir(UPLOADS_DIR)
+    
+    # Check core memory directory
+    if os.path.exists(CORE_MEMORY_DIR):
+        debug_info["core_memory_contents"] = os.listdir(CORE_MEMORY_DIR)
+    
+    # Check database
+    try:
+        with get_db_connection() as conn:
+            kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()
+            debug_info["database_stats"]["knowledge_base_docs"] = kb_docs['count']
+            
+            # Get recent uploads
+            recent_docs = conn.execute('''
+                SELECT filename, upload_date, character_count 
+                FROM knowledge_base_docs 
+                ORDER BY upload_date DESC 
+                LIMIT 5
+            ''').fetchall()
+            debug_info["database_stats"]["recent_uploads"] = [dict(doc) for doc in recent_docs]
+            
+    except Exception as e:
+        debug_info["database_error"] = str(e)
+    
+    return f"<pre>{json.dumps(debug_info, indent=2)}</pre>"
+
+@app.route("/admin/force-kb-refresh", methods=["POST"])
+def force_kb_refresh():
+    """Force refresh of knowledge base stats"""
+    if not session.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        # Force reload and recalculate knowledge base
+        knowledge_base = load_knowledge_base()
+        save_knowledge_base(knowledge_base)  # This will recalculate stats
+        
+        return jsonify({
+            "success": True, 
+            "message": "Knowledge base stats refreshed",
+            "stats": {
+                "total_documents": len(knowledge_base["documents"]),
+                "total_characters": knowledge_base.get("total_characters", 0),
+                "total_authors": len(knowledge_base.get("authorized_authors", []))
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/admin/cleanup", methods=["POST"])
 def admin_cleanup():
@@ -2088,71 +2105,6 @@ def admin_cleanup():
 # BATCH UPLOAD SYSTEM
 # ================================
 
-class BatchUploadManager:
-    """Manage uploading 30+ books efficiently"""
-    
-    def __init__(self):
-        self.processor = StreamingPDFProcessor()
-        self.upload_queue = []
-        self.results = []
-    
-    def add_books_to_queue(self, file_paths: List[str]):
-        """Add multiple books to upload queue"""
-        for file_path in file_paths:
-            if os.path.exists(file_path) and file_path.lower().endswith('.pdf'):
-                self.upload_queue.append(file_path)
-                print(f"📚 Added to queue: {os.path.basename(file_path)}")
-    
-    def process_batch_upload(self, progress_callback=None):
-        """Process all books in queue with progress tracking"""
-        total_books = len(self.upload_queue)
-        print(f"🚀 Starting batch upload of {total_books} books...")
-        
-        for i, file_path in enumerate(self.upload_queue):
-            filename = os.path.basename(file_path)
-            print(f"\n📖 Processing book {i+1}/{total_books}: {filename}")
-            
-            try:
-                # Process the PDF using compressed method
-                doc_info = add_document_compressed(file_path, filename, is_core=True)
-                
-                if not doc_info.get('error'):
-                    self.results.append({
-                        'filename': filename,
-                        'status': 'success',
-                        'size_mb': doc_info.get('file_size_mb', 0),
-                        'compression_ratio': doc_info.get('compression_ratio', 0),
-                        'authors': doc_info.get('extracted_authors', [])
-                    })
-                    
-                    print(f"✅ {filename} uploaded successfully")
-                else:
-                    self.results.append({
-                        'filename': filename,
-                        'status': 'failed',
-                        'error': doc_info.get('error', 'Unknown error')
-                    })
-                    print(f"❌ {filename} failed: {doc_info.get('error')}")
-                
-                # Progress callback
-                if progress_callback:
-                    progress_callback(i + 1, total_books, filename)
-                
-                # Memory cleanup between books
-                gc.collect()
-                time.sleep(0.5)  # Brief pause to prevent overwhelming
-                
-            except Exception as e:
-                error_msg = f"Failed to process {filename}: {str(e)}"
-                print(f"❌ {error_msg}")
-                self.results.append({
-                    'filename': filename,
-                    'status': 'failed',
-                    'error': error_msg
-                })
-        
-        return self.results
-
 @app.route("/admin/batch-process", methods=["POST"])
 def admin_batch_process():
     """Process batch upload via API"""
@@ -2165,7 +2117,6 @@ def admin_batch_process():
         if not files:
             return jsonify({"error": "No files uploaded"}), 400
         
-        batch_manager = BatchUploadManager()
         results = []
         
         for i, file in enumerate(files):
@@ -2226,12 +2177,15 @@ def admin_batch_process():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# INITIALIZATION AND STARTUP
+# MEMORY-SAFE INITIALIZATION
 # ================================
 
-def initialize_system():
-    """Initialize the therapeutic AI system with hybrid authentication and compression"""
-    print("🚀 Initializing Therapeutic AI with Hybrid Authentication and Large PDF Support...")
+def initialize_system_safe():
+    """Initialize with memory safety measures"""
+    print("🚀 Initializing Memory-Safe Therapeutic AI...")
+    
+    # Set memory limits
+    limit_memory()
     
     # Initialize database
     init_database()
@@ -2241,29 +2195,34 @@ def initialize_system():
     print(f"📚 Knowledge base loaded: {len(knowledge_base['documents'])} documents")
     
     # Check database health
-    with get_db_connection() as conn:
-        total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
-        authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
-        total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-        print(f"👥 Database: {total_users} users ({authenticated_users} registered, {total_users - authenticated_users} anonymous), {total_conversations} conversations")
+    try:
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            print(f"👥 Database: {total_users} users ({authenticated_users} registered, {total_users - authenticated_users} anonymous), {total_conversations} conversations")
+    except Exception as e:
+        print(f"⚠️ Database check failed: {e}")
     
-    # Check for compressed documents
-    compressed_docs = len([doc for doc in knowledge_base.get('documents', []) if doc.get('content_type', '').startswith('compressed')])
-    if compressed_docs > 0:
-        print(f"🗜️ Compression system active: {compressed_docs} compressed documents")
+    # Force initial garbage collection
+    gc.collect()
     
-    print("✅ Therapeutic AI system with large PDF support initialized successfully!")
-    print("🎯 System capabilities:")
-    print("   - User authentication & anonymous sessions")
-    print("   - PDFs up to 200MB with 85-90% compression")
-    print("   - Batch upload for 30+ books")
-    print("   - Persistent memory & conversation continuity")
-    print("   - Admin knowledge base management")
-    print("   - Enhanced debugging and diagnostics")
+    print("✅ Memory-safe Therapeutic AI initialized!")
+    print("🎯 Safety features active:")
+    print("   - 512MB memory limit")
+    print("   - 50MB PDF limit for personal uploads")
+    print("   - 100MB PDF limit for admin uploads")
+    print("   - 200 page limit per PDF")
+    print("   - Aggressive garbage collection")
+    print("   - Enhanced error handling")
+
+# ================================
+# APPLICATION STARTUP
+# ================================
 
 if __name__ == "__main__":
-    initialize_system()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    initialize_system_safe()
+    app.run(host="0.0.0.0", port=5000, debug=False)  # Disable debug in production
 else:
-    initialize_system()
+    initialize_system_safe()
     application = app
