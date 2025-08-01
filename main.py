@@ -1,4 +1,1063 @@
-import os
+else:
+        # New visitor - create anonymous user and go directly to chat
+        user = get_or_create_user()
+        is_admin = is_admin_user()
+        return render_template("index.html", is_admin=is_admin, user_id=user['id'])
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    """Admin panel"""
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password == admin_password:
+            session["is_admin"] = True
+            return redirect("/admin")
+        else:
+            return render_template("admin_login.html", error="Invalid password")
+    
+    if not session.get("is_admin"):
+        return render_template("admin_login.html")
+    
+    knowledge_base = load_knowledge_base()
+    return render_template("admin_dashboard.html", 
+                         knowledge_base=knowledge_base,
+                         total_docs=len(knowledge_base["documents"]),
+                         authorized_authors=knowledge_base.get("authorized_authors", []))
+
+@app.route("/admin/logout", methods=["GET"])
+def admin_logout():
+    """Admin logout route"""
+    session.pop("is_admin", None)
+    return redirect("/")
+
+@app.route("/admin/batch-upload", methods=["GET"])
+def admin_batch_upload():
+    """Batch upload interface for multiple large PDFs"""
+    if not session.get("is_admin"):
+        return redirect("/admin")
+    
+    return render_template("batch_upload.html")
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    """Chat endpoint - supports both authenticated and anonymous users"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        
+        # Increment session counter for authenticated users
+        if session.get('authenticated'):
+            with get_db_connection() as conn:
+                conn.execute(
+                    'UPDATE users SET total_sessions = total_sessions + 1 WHERE id = ?',
+                    (user_id,)
+                )
+                conn.commit()
+        
+        data = request.get_json()
+        user_input = data.get("user_input", "")
+        agent = data.get("agent", "")
+
+        print(f"💬 Chat request - User: {user_id}, Input: {user_input[:100]}..., Agent: {agent}")
+
+        # Save user message
+        save_conversation_message(user_id, "user", user_input)
+
+        # Build system prompt based on agent
+        user_name = user.get('full_name') or user.get('username') or 'User'
+        base_instruction = f"You are a professional therapeutic AI supporting {user_name}. You have access to curated therapeutic knowledge from uploaded books and conversation history. Always reference specific uploaded materials when relevant and provide continuity from previous conversations."
+
+        agent_prompts = {
+            "case_assistant": f"{base_instruction} You assist with social work case analysis using evidence-based approaches from your knowledge base.",
+            "research_critic": f"{base_instruction} You critically evaluate research using evidence-based approaches and reference uploaded therapeutic literature.",
+            "therapy_planner": f"{base_instruction} You plan therapeutic interventions using proven methodologies from your uploaded therapeutic resources.",
+            "therapist": f"{base_instruction} {config.get('claude_system_prompt', 'You provide therapeutic support using systemic, Ericksonian, and evidence-based approaches.')}"
+        }
+
+        system_prompt = agent_prompts.get(agent, agent_prompts["therapist"])
+        model = config.get("claude_model", "claude-3-haiku-20240307")
+
+        # Get AI response with full context - THIS IS THE KEY FIX!
+        response_text = call_model_with_context(model, system_prompt, user_input, user_id)
+        
+        # Save AI response
+        save_conversation_message(user_id, "assistant", response_text, agent)
+
+        print(f"✅ Chat response generated ({len(response_text)} chars)")
+        
+        return jsonify({
+            "response": response_text, 
+            "user_id": user_id,
+            "username": user.get('username', '')
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in chat endpoint: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# ================================
+# ENHANCED UPLOAD ROUTE WITH MEMORY OPTIMIZATION
+# ================================
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    """Enhanced memory-safe file upload endpoint with optimized limits"""
+    print(f"🔍 UPLOAD START - Enhanced memory optimization active")
+    
+    try:
+        user = get_or_create_user()
+        if not user:
+            print("❌ No user session")
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        print(f"🔍 User ID: {user_id}")
+        
+        if "pdf" not in request.files:
+            print("❌ No PDF in request.files")
+            return jsonify({"message": "No file selected", "success": False})
+        
+        file = request.files["pdf"]
+        
+        if not file or not file.filename:
+            print("❌ No file or filename")
+            return jsonify({"message": "No file selected", "success": False})
+            
+        if not file.filename.lower().endswith(".pdf"):
+            print("❌ Not a PDF file")
+            return jsonify({"message": "Please select a PDF file", "success": False})
+        
+        upload_type = request.form.get("upload_type", "personal")
+        use_streaming = request.form.get("use_streaming", "false") == "true"
+        
+        # Check file size before processing
+        file.seek(0, 2)  # Seek to end
+        file_size = file.tell()
+        file.seek(0)  # Reset to beginning
+        file_size_mb = file_size / (1024 * 1024)
+        
+        print(f"🔍 File size: {file_size_mb:.1f}MB")
+        
+        # Use optimized memory limits
+        if upload_type == "admin" and file_size_mb > MAX_ADMIN_FILE_SIZE_MB:
+            return jsonify({
+                "message": f"Admin file too large ({file_size_mb:.1f}MB). Maximum: {MAX_ADMIN_FILE_SIZE_MB}MB",
+                "success": False
+            })
+        elif upload_type == "personal" and file_size_mb > MAX_FILE_SIZE_MB:
+            return jsonify({
+                "message": f"Personal file too large ({file_size_mb:.1f}MB). Maximum: {MAX_FILE_SIZE_MB}MB", 
+                "success": False
+            })
+        
+        if upload_type == "admin":
+            # ADMIN UPLOAD
+            if not is_admin_user():
+                print("❌ Not admin user")
+                return jsonify({
+                    "message": "Access denied. Admin privileges required.", 
+                    "success": False
+                }), 403
+            
+            print("🔍 Admin upload - saving file...")
+            file_path = os.path.join(UPLOADS_DIR, file.filename)
+            
+            # Ensure directory exists
+            os.makedirs(UPLOADS_DIR, exist_ok=True)
+            
+            # Save file
+            file.save(file_path)
+            print(f"✅ Admin file saved to: {file_path}")
+            
+            # Choose processing method based on size with optimized thresholds
+            if use_streaming or file_size_mb > COMPRESSION_THRESHOLD_MB:
+                print("🔍 Using enhanced compressed processing method")
+                doc_info = add_document_compressed(file_path, file.filename, is_core=True)
+            else:
+                print("🔍 Using legacy processing method")
+                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
+            
+            print(f"🔍 Admin document processing result: {doc_info}")
+            
+            if "error" in doc_info:
+                print(f"❌ Admin document processing error: {doc_info['error']}")
+                # Clean up uploaded file
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+                return jsonify({"message": doc_info["error"], "success": False})
+            
+            # Clean up uploaded file
+            try:
+                os.remove(file_path)
+                print(f"🔍 Cleaned up admin temp file: {file_path}")
+            except Exception as e:
+                print(f"⚠️ Could not remove admin temp file: {e}")
+            
+            authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
+            compression_text = f" | {doc_info.get('compression_ratio', 0)}% compression" if doc_info.get('compression_ratio', 0) > 0 else ""
+            
+            return jsonify({
+                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']:,} characters){compression_text}{authors_text}", 
+                "success": True,
+                "type": "admin",
+                "extracted_authors": doc_info['extracted_authors'],
+                "compression_ratio": doc_info.get('compression_ratio', 0)
+            })
+        
+        else:
+            # PERSONAL UPLOAD
+            print("🔍 Personal document upload")
+            file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
+            
+            # Ensure directory exists
+            os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
+            
+            # Save file
+            file.save(file_path)
+            print(f"✅ Personal file saved to: {file_path}")
+            
+            doc_info = add_personal_document_persistent(file_path, file.filename, user_id)
+            print(f"🔍 Personal document processing result: {doc_info}")
+            
+            if "error" in doc_info:
+                print(f"❌ Personal document processing error: {doc_info['error']}")
+                # Clean up uploaded file
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+                return jsonify({"message": doc_info["error"], "success": False})
+            
+            # Clean up uploaded file
+            try:
+                os.remove(file_path)
+                print(f"🔍 Cleaned up personal temp file: {file_path}")
+            except Exception as e:
+                print(f"⚠️ Could not remove personal temp file: {e}")
+            
+            return jsonify({
+                "message": f"✅ Added '{file.filename}' to your persistent documents ({doc_info['character_count']:,} characters)", 
+                "success": True,
+                "type": "personal"
+            })
+        
+    except Exception as e:
+        print(f"❌ Upload exception: {str(e)}")
+        traceback.print_exc()
+        # Force memory cleanup on error
+        gc.collect()
+        return jsonify({
+            "error": f"Upload failed: {str(e)}", 
+            "success": False
+        }), 500
+
+# ================================
+# REMAINING ROUTES
+# ================================
+
+@app.route("/clear", methods=["POST"])
+def clear():
+    """Clear chat history"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        clear_user_conversation(user_id)
+        return jsonify({"message": "Chat history cleared (documents and progress retained)"})
+    except Exception as e:
+        print(f"Error in clear endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/clear-documents", methods=["POST"])
+def clear_documents():
+    """Clear personal documents"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        cleared_count = clear_user_documents(user_id)
+        return jsonify({"message": f"Cleared {cleared_count} personal documents"})
+    except Exception as e:
+        print(f"Error in clear documents endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/conversation-history", methods=["GET"])
+def get_conversation_history():
+    """Get user's persistent conversation history"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        history = get_user_conversation_history(user_id, limit=100)
+        return jsonify({"conversation_history": history, "user_id": user_id})
+    except Exception as e:
+        print(f"Error in conversation history endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/personal-documents", methods=["GET"])
+def get_personal_documents():
+    """Get user's persistent personal documents"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        docs = get_user_documents(user_id)
+        
+        # Return summary info (not full content for performance)
+        doc_summaries = [
+            {
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "upload_date": doc["upload_date"],
+                "character_count": doc["character_count"]
+            }
+            for doc in docs
+        ]
+        
+        return jsonify({"personal_documents": doc_summaries, "user_id": user_id})
+    except Exception as e:
+        print(f"Error in personal documents endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/knowledge-base", methods=["GET"])
+def get_knowledge_base():
+    """Get knowledge base status"""
+    try:
+        knowledge_base = load_knowledge_base()
+        
+        # Get database stats
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            active_users = conn.execute(
+                'SELECT COUNT(*) as count FROM users WHERE last_active > datetime("now", "-30 days")'
+            ).fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+        
+        return jsonify({
+            "total_documents": len(knowledge_base["documents"]),
+            "total_characters": knowledge_base.get("total_characters", 0),
+            "last_updated": knowledge_base.get("last_updated"),
+            "authorized_authors": knowledge_base.get("authorized_authors", []),
+            "total_authors": len(knowledge_base.get("authorized_authors", [])),
+            "system_stats": {
+                "total_users": total_users,
+                "active_users_30d": active_users,
+                "total_conversations": total_conversations
+            }
+        })
+    except Exception as e:
+        print(f"Error in knowledge base endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/user-stats", methods=["GET"])
+def get_user_stats():
+    """Get current user's statistics"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        
+        with get_db_connection() as conn:
+            conversation_count = conn.execute(
+                'SELECT COUNT(*) as count FROM conversations WHERE user_id = ?', (user_id,)
+            ).fetchone()['count']
+            
+            document_count = conn.execute(
+                'SELECT COUNT(*) as count FROM user_documents WHERE user_id = ? AND is_active = 1', (user_id,)
+            ).fetchone()['count']
+            
+            days_active = conn.execute('''
+                SELECT CAST((julianday('now') - julianday(created_at)) AS INTEGER) as days
+                FROM users WHERE id = ?
+            ''', (user_id,)).fetchone()['days']
+        
+        return jsonify({
+            "user_id": user_id,
+            "conversation_messages": conversation_count,
+            "personal_documents": document_count,
+            "days_active": days_active,
+            "created_at": user.get('created_at'),
+            "last_active": user.get('last_active')
+        })
+    except Exception as e:
+        print(f"Error in user stats endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/log", methods=["GET"])
+def get_log():
+    """Download user's conversation history"""
+    try:
+        user = get_or_create_user()
+        if not user:
+            return jsonify({"error": "User session required"}), 401
+        
+        user_id = user['id']
+        
+        # Get full conversation history
+        history = get_user_conversation_history(user_id, limit=1000)
+        
+        # Get user documents
+        docs = get_user_documents(user_id)
+        
+        # Format for download
+        export_data = {
+            "user_id": user_id,
+            "username": user.get('username', ''),
+            "full_name": user.get('full_name', ''),
+            "export_date": datetime.now().isoformat(),
+            "conversation_history": history,
+            "personal_documents": [
+                {
+                    "filename": doc["filename"],
+                    "upload_date": doc["upload_date"],
+                    "character_count": doc["character_count"]
+                }
+                for doc in docs
+            ],
+            "stats": {
+                "total_messages": len(history),
+                "total_documents": len(docs)
+            }
+        }
+        
+        return jsonify(export_data)
+    except Exception as e:
+        print(f"Error in log endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/health")
+def health():
+    """System health check with memory usage"""
+    try:
+        # Test API connections
+        openai_works = False
+        claude_works = False
+        
+        if openai_api_key:
+            try:
+                test_response = call_openai_direct("You are a test.", "Hello")
+                openai_works = not test_response.startswith("Error")
+            except:
+                pass
+        
+        if claude_api_key:
+            try:
+                test_response = call_claude_direct("You are a test.", "Hello")
+                claude_works = not test_response.startswith("Error")
+            except:
+                pass
+        
+        # Database stats
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            total_user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
+        
+        knowledge_base = load_knowledge_base()
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "memory_optimization": {
+                "max_admin_file_mb": MAX_ADMIN_FILE_SIZE_MB,
+                "max_personal_file_mb": MAX_FILE_SIZE_MB,
+                "max_pages_per_pdf": MAX_PAGES_PER_PDF,
+                "max_text_size_mb": MAX_TEXT_SIZE_MB,
+                "compression_threshold_mb": COMPRESSION_THRESHOLD_MB
+            },
+            "apis": {
+                "openai_configured": openai_api_key is not None,
+                "openai_working": openai_works,
+                "claude_configured": claude_api_key is not None,
+                "claude_working": claude_works
+            },
+            "database": {
+                "total_users": total_users,
+                "authenticated_users": authenticated_users,
+                "anonymous_users": total_users - authenticated_users,
+                "total_conversations": total_conversations,
+                "total_user_documents": total_user_docs,
+                "knowledge_base_documents": len(knowledge_base["documents"]),
+                "authorized_authors": len(knowledge_base.get("authorized_authors", []))
+            },
+            "features": {
+                "user_authentication": True,
+                "anonymous_sessions": True,
+                "persistent_memory": True,
+                "conversation_continuity": True,
+                "personal_documents": True,
+                "knowledge_base": True,
+                "pdf_extraction": "pdfplumber",
+                "controlled_knowledge": True,
+                "large_pdf_support": True,
+                "compression_system": True,
+                "batch_upload": True,
+                "memory_safety": True,
+                "enhanced_context_retrieval": True
+            },
+            "memory_info": {
+                "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
+                "database_file": DATABASE_FILE,
+                "pdf_max_size_mb": MAX_ADMIN_FILE_SIZE_MB,
+                "compression_enabled": True,
+                "memory_limit_mb": 2048,
+                "tier": "standard"
+            }
+        })
+    except Exception as e:
+        print(f"Error in health endpoint: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+# ================================
+# ENHANCED ADMIN DIAGNOSTIC ROUTES
+# ================================
+
+@app.route("/admin/test-context", methods=["GET"])
+def test_context():
+    """Test context building functionality"""
+    if not is_admin_user():
+        return "Admin access required", 403
+    
+    try:
+        # Test context building
+        test_query = "What therapeutic books do you have access to?"
+        context = build_therapeutic_context("test_user", test_query)
+        
+        return f"""<pre>
+=== CONTEXT BUILDING TEST ===
+Query: {test_query}
+Context Length: {len(context)} characters
+
+=== CONTEXT CONTENT ===
+{context}
+</pre>"""
+    except Exception as e:
+        return f"<pre>Context building failed: {str(e)}\n\n{traceback.format_exc()}</pre>"
+
+@app.route("/admin/check-permissions", methods=["GET"])
+def check_permissions():
+    """Check file system permissions and directory status"""
+    if not session.get("is_admin"):
+        return "Admin access required", 403
+    
+    checks = {}
+    
+    # Check if directories exist and are writable
+    for dir_name in [UPLOADS_DIR, CORE_MEMORY_DIR, USER_UPLOADS_DIR]:
+        checks[dir_name] = {
+            "exists": os.path.exists(dir_name),
+            "is_dir": os.path.isdir(dir_name) if os.path.exists(dir_name) else False,
+            "writable": os.access(dir_name, os.W_OK) if os.path.exists(dir_name) else False,
+            "contents": os.listdir(dir_name) if os.path.exists(dir_name) else []
+        }
+    
+    # Check knowledge base file
+    kb_file = os.path.join(CORE_MEMORY_DIR, "knowledge_base.json")
+    checks["knowledge_base.json"] = {
+        "exists": os.path.exists(kb_file),
+        "readable": os.access(kb_file, os.R_OK) if os.path.exists(kb_file) else False,
+        "writable": os.access(kb_file, os.W_OK) if os.path.exists(kb_file) else False,
+        "size": os.path.getsize(kb_file) if os.path.exists(kb_file) else 0
+    }
+    
+    # Check database file
+    checks["database"] = {
+        "exists": os.path.exists(DATABASE_FILE),
+        "readable": os.access(DATABASE_FILE, os.R_OK) if os.path.exists(DATABASE_FILE) else False,
+        "writable": os.access(DATABASE_FILE, os.W_OK) if os.path.exists(DATABASE_FILE) else False,
+        "size": os.path.getsize(DATABASE_FILE) if os.path.exists(DATABASE_FILE) else 0
+    }
+    
+    return f"<pre>{json.dumps(checks, indent=2)}</pre>"
+
+@app.route("/admin/debug-kb", methods=["GET"])
+def debug_knowledge_base():
+    """Debug knowledge base status"""
+    if not session.get("is_admin"):
+        return "Admin access required", 403
+    
+    debug_info = {
+        "knowledge_base_file_exists": os.path.exists(KNOWLEDGE_BASE_FILE),
+        "knowledge_base_file_size": 0,
+        "knowledge_base_content": {},
+        "uploads_dir_exists": os.path.exists(UPLOADS_DIR),
+        "uploads_dir_contents": [],
+        "database_stats": {},
+        "core_memory_dir_exists": os.path.exists(CORE_MEMORY_DIR),
+        "core_memory_contents": []
+    }
+    
+    # Check knowledge base file size
+    if os.path.exists(KNOWLEDGE_BASE_FILE):
+        debug_info["knowledge_base_file_size"] = os.path.getsize(KNOWLEDGE_BASE_FILE)
+        
+        # Try to read content
+        try:
+            kb_content = load_knowledge_base()
+            debug_info["knowledge_base_content"] = {
+                "total_documents": len(kb_content.get("documents", [])),
+                "total_authors": len(kb_content.get("authorized_authors", [])),
+                "last_updated": kb_content.get("last_updated"),
+                "total_characters": kb_content.get("total_characters", 0),
+                "document_filenames": [doc.get("filename") for doc in kb_content.get("documents", [])],
+                "document_types": [doc.get("content_type", "unknown") for doc in kb_content.get("documents", [])]
+            }
+        except Exception as e:
+            debug_info["knowledge_base_error"] = str(e)
+    
+    # Check uploads directory
+    if os.path.exists(UPLOADS_DIR):
+        debug_info["uploads_dir_contents"] = os.listdir(UPLOADS_DIR)
+    
+    # Check core memory directory
+    if os.path.exists(CORE_MEMORY_DIR):
+        debug_info["core_memory_contents"] = os.listdir(CORE_MEMORY_DIR)
+    
+    # Check database
+    try:
+        with get_db_connection() as conn:
+            kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()
+            debug_info["database_stats"]["knowledge_base_docs"] = kb_docs['count']
+            
+            # Get recent uploads
+            recent_docs = conn.execute('''
+                SELECT filename, upload_date, character_count 
+                FROM knowledge_base_docs 
+                ORDER BY upload_date DESC 
+                LIMIT 5
+            ''').fetchall()
+            debug_info["database_stats"]["recent_uploads"] = [dict(doc) for doc in recent_docs]
+            
+    except Exception as e:
+        debug_info["database_error"] = str(e)
+    
+    return f"<pre>{json.dumps(debug_info, indent=2)}</pre>"
+
+@app.route("/admin/force-kb-refresh", methods=["POST"])
+def force_kb_refresh():
+    """Force refresh of knowledge base stats"""
+    if not session.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        # Force reload and recalculate knowledge base
+        knowledge_base = load_knowledge_base()
+        save_knowledge_base(knowledge_base)  # This will recalculate stats
+        
+        return jsonify({
+            "success": True, 
+            "message": "Knowledge base stats refreshed",
+            "stats": {
+                "total_documents": len(knowledge_base["documents"]),
+                "total_characters": knowledge_base.get("total_characters", 0),
+                "total_authors": len(knowledge_base.get("authorized_authors", []))
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/admin/cleanup", methods=["POST"])
+def admin_cleanup():
+    """Admin endpoint for database maintenance"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        days_old = int(request.json.get("days_old", 90))
+        
+        with get_db_connection() as conn:
+            # Clean old inactive users (anonymous only)
+            old_users = conn.execute('''
+                DELETE FROM users 
+                WHERE last_active < datetime('now', '-{} days') 
+                AND email IS NULL
+                AND id NOT IN (SELECT DISTINCT user_id FROM conversations WHERE timestamp > datetime('now', '-30 days'))
+            '''.format(days_old))
+            
+            # Clean orphaned conversations
+            orphaned_convs = conn.execute('''
+                DELETE FROM conversations 
+                WHERE user_id NOT IN (SELECT id FROM users)
+            ''')
+            
+            # Clean orphaned documents
+            orphaned_docs = conn.execute('''
+                DELETE FROM user_documents 
+                WHERE user_id NOT IN (SELECT id FROM users)
+            ''')
+            
+            conn.commit()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        return jsonify({
+            "message": "Database cleanup completed",
+            "removed": {
+                "old_anonymous_users": old_users.rowcount,
+                "orphaned_conversations": orphaned_convs.rowcount,
+                "orphaned_documents": orphaned_docs.rowcount
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ================================
+# BATCH UPLOAD SYSTEM
+# ================================
+
+@app.route("/admin/batch-process", methods=["POST"])
+def admin_batch_process():
+    """Process batch upload via API"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        # Get uploaded files
+        files = request.files.getlist('pdfs')
+        if not files:
+            return jsonify({"error": "No files uploaded"}), 400
+        
+        results = []
+        
+        for i, file in enumerate(files):
+            if file.filename and file.filename.lower().endswith('.pdf'):
+                try:
+                    # Save file temporarily
+                    temp_path = os.path.join(UPLOADS_DIR, f"batch_{i}_{file.filename}")
+                    file.save(temp_path)
+                    
+                    # Process with enhanced compression
+                    doc_info = add_document_compressed(temp_path, file.filename, is_core=True)
+                    
+                    if not doc_info.get('error'):
+                        results.append({
+                            'filename': file.filename,
+                            'status': 'failed',
+                            'error': doc_info.get('error', 'Processing failed')
+                        })
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    results.append({
+                        'filename': file.filename,
+                        'status': 'failed',
+                        'error': str(e)
+                    })
+        
+        # Calculate summary stats
+        successful = len([r for r in results if r['status'] == 'success'])
+        failed = len([r for r in results if r['status'] == 'failed'])
+        
+        return jsonify({
+            "success": True,
+            "message": f"Batch upload completed: {successful} successful, {failed} failed",
+            "results": results,
+            "summary": {
+                "total": len(results),
+                "successful": successful,
+                "failed": failed
+            }
+        })
+        
+    except Exception as e:
+        print(f"Batch upload error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ================================
+# MEMORY-SAFE INITIALIZATION
+# ================================
+
+def initialize_system_safe():
+    """Initialize with enhanced memory safety measures"""
+    print("🚀 Initializing Enhanced Memory-Safe Therapeutic AI...")
+    
+    # Set memory limits
+    limit_memory()
+    
+    # Display memory optimization settings
+    print(f"💾 Memory Optimization Active:")
+    print(f"   - Max admin file size: {MAX_ADMIN_FILE_SIZE_MB}MB")
+    print(f"   - Max personal file size: {MAX_FILE_SIZE_MB}MB")
+    print(f"   - Max pages per PDF: {MAX_PAGES_PER_PDF}")
+    print(f"   - Max text size: {MAX_TEXT_SIZE_MB}MB")
+    print(f"   - Compression threshold: {COMPRESSION_THRESHOLD_MB}MB")
+    
+    # Initialize database
+    init_database()
+    
+    # Load knowledge base with enhanced logging
+    knowledge_base = load_knowledge_base()
+    print(f"📚 Knowledge base loaded: {len(knowledge_base['documents'])} documents")
+    
+    # Test context building to ensure it works
+    try:
+        test_context = build_therapeutic_context("test_user", "test query")
+        print(f"🔍 Context building test: {len(test_context)} characters")
+    except Exception as e:
+        print(f"⚠️ Context building test failed: {e}")
+    
+    # Check database health
+    try:
+        with get_db_connection() as conn:
+            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
+            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()['count']
+            print(f"👥 Database: {total_users} users ({authenticated_users} registered, {total_users - authenticated_users} anonymous)")
+            print(f"💬 Conversations: {total_conversations}")
+            print(f"📊 KB docs in database: {kb_docs}")
+    except Exception as e:
+        print(f"⚠️ Database check failed: {e}")
+    
+    # Force initial garbage collection
+    gc.collect()
+    
+    print("✅ Enhanced Memory-safe Therapeutic AI initialized!")
+    print("🎯 Enhanced features active:")
+    print("   - Memory optimization constants")
+    print("   - Enhanced content retrieval")
+    print("   - Improved context building")
+    print("   - Better compression handling")
+    print("   - Enhanced error handling")
+    print("   - Diagnostic tools")
+
+# ================================
+# APPLICATION STARTUP
+# ================================
+
+if __name__ == "__main__":
+    initialize_system_safe()
+    app.run(host="0.0.0.0", port=5000, debug=False)  # Disable debug in production
+else:
+    initialize_system_safe()
+    application = app
+                            'filename': file.filename,
+                            'status': 'success',
+                            'size_mb': doc_info.get('file_size_mb', 0),
+                            'compression_ratio': doc_info.get('compression_ratio', 0),
+                            'authors': doc_info.get('extracted_authors', [])
+                        })
+                    else:
+                        results.append({
+                            # ================================
+# AUTHENTICATION ROUTES
+# ================================
+
+@app.route("/welcome", methods=["GET"])
+def welcome():
+    """Public landing page for new visitors"""
+    return render_template("welcome.html")
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """User registration"""
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            email = data.get("email", "").strip().lower()
+            username = data.get("username", "").strip()
+            password = data.get("password", "")
+            full_name = data.get("full_name", "").strip()
+            
+            # Validation
+            if not email or not username or not password or not full_name:
+                return jsonify({"error": "All fields are required"}), 400
+            
+            if len(password) < 8:
+                return jsonify({"error": "Password must be at least 8 characters"}), 400
+                
+            if "@" not in email or "." not in email:
+                return jsonify({"error": "Please enter a valid email address"}), 400
+            
+            # Check if user exists
+            with get_db_connection() as conn:
+                existing_user = conn.execute(
+                    'SELECT id FROM users WHERE email = ? OR username = ?', 
+                    (email, username)
+                ).fetchone()
+                
+                if existing_user:
+                    return jsonify({"error": "Email or username already exists"}), 400
+                
+                # Create new user
+                user_id = str(uuid.uuid4())
+                password_hash = hash_password(password)
+                
+                conn.execute('''
+                    INSERT INTO users (id, email, username, password_hash, full_name, is_verified)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                ''', (user_id, email, username, password_hash, full_name))
+                conn.commit()
+                
+                # Log them in
+                session['user_id'] = user_id
+                session['authenticated'] = True
+                session['username'] = username
+                
+                print(f"✅ New user registered: {username} ({email})")
+                return jsonify({
+                    "success": True, 
+                    "message": "Account created successfully!",
+                    "redirect": "/"
+                })
+                
+        except Exception as e:
+            print(f"Registration error: {e}")
+            return jsonify({"error": "Registration failed. Please try again."}), 500
+    
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """User login"""
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            email_or_username = data.get("email_or_username", "").strip().lower()
+            password = data.get("password", "")
+            
+            if not email_or_username or not password:
+                return jsonify({"error": "Email/username and password are required"}), 400
+            
+            # Find user
+            with get_db_connection() as conn:
+                user = conn.execute('''
+                    SELECT * FROM users 
+                    WHERE (email = ? OR username = ?) AND is_active = 1
+                ''', (email_or_username, email_or_username)).fetchone()
+                
+                if not user or not user['password_hash'] or not verify_password(password, user['password_hash']):
+                    return jsonify({"error": "Invalid email/username or password"}), 401
+                
+                # Update last active
+                conn.execute(
+                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                    (user['id'],)
+                )
+                conn.commit()
+                
+                # Log them in
+                session['user_id'] = user['id']
+                session['authenticated'] = True
+                session['username'] = user['username']
+                
+                print(f"✅ User logged in: {user['username']}")
+                return jsonify({
+                    "success": True,
+                    "message": f"Welcome back, {user['full_name'] or user['username']}!",
+                    "redirect": "/"
+                })
+                
+        except Exception as e:
+            print(f"Login error: {e}")
+            return jsonify({"error": "Login failed. Please try again."}), 500
+    
+    return render_template("login.html")
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    """User logout"""
+    username = session.get('username', 'User')
+    session.clear()
+    
+    if request.method == "POST":
+        return jsonify({"success": True, "message": "Logged out successfully"})
+    
+    return redirect('/welcome')
+
+@app.route("/profile", methods=["GET", "POST"])
+@require_login
+def profile():
+    """User profile management"""
+    user = get_authenticated_user()
+    if not user:
+        return redirect('/login')
+    
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            full_name = data.get("full_name", "").strip()
+            therapy_goals = data.get("therapy_goals", "").strip()
+            
+            with get_db_connection() as conn:
+                conn.execute('''
+                    UPDATE users 
+                    SET full_name = ?, therapy_goals = ?
+                    WHERE id = ?
+                ''', (full_name, therapy_goals, user['id']))
+                conn.commit()
+            
+            return jsonify({"success": True, "message": "Profile updated successfully"})
+            
+        except Exception as e:
+            return jsonify({"error": "Failed to update profile"}), 500
+    
+    # Get user stats
+    with get_db_connection() as conn:
+        stats = conn.execute('''
+            SELECT 
+                COUNT(DISTINCT c.id) as total_conversations,
+                COUNT(DISTINCT d.id) as total_documents,
+                MAX(c.timestamp) as last_session
+            FROM users u
+            LEFT JOIN conversations c ON u.id = c.user_id
+            LEFT JOIN user_documents d ON u.id = d.user_id AND d.is_active = 1
+            WHERE u.id = ?
+        ''', (user['id'],)).fetchone()
+    
+    return render_template("profile.html", user=user, stats=dict(stats))
+
+# ================================
+# MAIN APPLICATION ROUTES
+# ================================
+
+@app.route("/", methods=["GET"])
+def root():
+    """Root route - hybrid support for authenticated and anonymous users"""
+    # If user is authenticated, go to chat
+    if session.get('authenticated'):
+        user = get_authenticated_user()
+        if user:
+            is_admin = is_admin_user()
+            return render_template("index.html", 
+                                 is_admin=is_admin, 
+                                 user_id=user['id'],
+                                 username=user.get('username', ''),
+                                 full_name=user.get('full_name', user.get('username', '')))
+    
+    # Legacy support for anonymous users OR create new anonymous user
+    if 'user_id' in session:
+        # Existing anonymous user - continue their session
+        user = get_or_create_user()
+        is_admin = is_admin_user()
+        return render_template("index.html", is_admin=is_admin, user_id=user['id'])
+    elseimport os
 import json
 import requests
 import hashlib
@@ -26,11 +1085,22 @@ from collections import Counter
 import traceback
 
 load_dotenv()
+
+# ================================
+# MEMORY OPTIMIZATION CONSTANTS - ADD FIRST!
+# ================================
+MAX_FILE_SIZE_MB = 50  # Reduce from 100MB to 50MB
+MAX_ADMIN_FILE_SIZE_MB = 100  # Reduce from 200MB to 100MB
+MAX_PAGES_PER_PDF = 200  # Reduce from 500 to 200 pages
+MAX_TEXT_SIZE_MB = 10  # Reduce from 20MB to 10MB
+COMPRESSION_THRESHOLD_MB = 25  # Reduce from 50MB to 25MB
+CHUNK_SIZE_CHARS = 50000  # Process text in 50K character chunks
+
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-secret-key-change-this")
 
-# CRITICAL: Memory and upload safety settings
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max request
+# CRITICAL: Memory and upload safety settings - UPDATED
+app.config['MAX_CONTENT_LENGTH'] = MAX_ADMIN_FILE_SIZE_MB * 1024 * 1024  # Use constant
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching
 app.config['JSON_AS_ASCII'] = False
 
@@ -514,8 +1584,9 @@ class StreamingPDFProcessor:
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
             print(f"📚 Processing large PDF: {file_path} ({file_size_mb:.1f}MB)")
             
-            if file_size_mb > 200:  # 200MB limit even with streaming
-                return {"error": f"PDF too large ({file_size_mb:.1f}MB). Maximum: 200MB"}
+            # Use optimized limit
+            if file_size_mb > MAX_ADMIN_FILE_SIZE_MB:
+                return {"error": f"PDF too large ({file_size_mb:.1f}MB). Maximum: {MAX_ADMIN_FILE_SIZE_MB}MB"}
             
             compressed_chunks = []
             total_pages = 0
@@ -606,16 +1677,16 @@ class StreamingPDFProcessor:
         return chunk_text
 
 # ================================
-# MEMORY-SAFE PDF PROCESSING
+# ENHANCED PDF PROCESSING WITH MEMORY LIMITS
 # ================================
 
-def extract_text_from_pdf_efficient(file_path, max_size_mb=200):  # INCREASED for Standard tier
-    """Memory-efficient PDF extraction with reasonable limits for Standard tier"""
+def extract_text_from_pdf_efficient(file_path, max_size_mb=MAX_ADMIN_FILE_SIZE_MB):
+    """Enhanced memory-efficient PDF extraction with optimized limits"""
     try:
         file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
+        print(f"📚 Processing PDF: {file_path} ({file_size:.1f}MB)")
         
-        # More generous limits for Standard tier
+        # Use optimized limits
         if file_size > max_size_mb:
             return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
         
@@ -628,10 +1699,10 @@ def extract_text_from_pdf_efficient(file_path, max_size_mb=200):  # INCREASED fo
         try:
             with pdfplumber.open(file_path) as pdf:
                 total_pages = len(pdf.pages)
-                print(f"PDF has {total_pages} pages")
+                print(f"📄 PDF has {total_pages} pages")
                 
-                # More generous page limits for Standard tier
-                max_pages = min(total_pages, 500)  # Max 500 pages (increased from 200)
+                # Use optimized page limits
+                max_pages = min(total_pages, MAX_PAGES_PER_PDF)
                 if total_pages > max_pages:
                     print(f"⚠️ Large PDF detected - processing first {max_pages} pages only")
                 
@@ -644,31 +1715,31 @@ def extract_text_from_pdf_efficient(file_path, max_size_mb=200):  # INCREASED fo
                             text_content += page_text.strip() + "\n"
                             page_count += 1
                         
-                        # Less aggressive memory management for Standard tier
-                        if page_num % 25 == 0:  # Every 25 pages
+                        # Optimized memory management
+                        if page_num % 20 == 0:  # Every 20 pages
                             gc.collect()
                             
                         # Progress indication
                         if page_num % 50 == 0 and page_num > 0:
-                            print(f"Processed {page_num}/{max_pages} pages...")
+                            print(f"📖 Processed {page_num}/{max_pages} pages...")
                             
-                        # Higher memory safety threshold for Standard tier
-                        if len(text_content) > 20 * 1024 * 1024:  # 20MB text limit (increased from 5MB)
+                        # Use optimized memory safety threshold
+                        if len(text_content) > MAX_TEXT_SIZE_MB * 1024 * 1024:
                             print("⚠️ Text content limit reached - stopping extraction")
                             break
                             
                     except Exception as e:
-                        print(f"Error extracting page {page_num + 1}: {e}")
+                        print(f"⚠️ Error extracting page {page_num + 1}: {e}")
                         continue
                         
         except Exception as pdf_error:
-            print(f"PDF processing error: {pdf_error}")
+            print(f"❌ PDF processing error: {pdf_error}")
             return f"Error processing PDF: {str(pdf_error)}"
         
         if not text_content.strip():
             return f"No text could be extracted from {os.path.basename(file_path)}"
         
-        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
+        print(f"✅ Successfully extracted {len(text_content):,} characters from {page_count} pages")
         return text_content
         
     except Exception as e:
@@ -717,7 +1788,9 @@ def load_knowledge_base():
     try:
         if os.path.exists(KNOWLEDGE_BASE_FILE):
             with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                kb = json.load(f)
+                print(f"📚 Loaded knowledge base: {len(kb.get('documents', []))} documents")
+                return kb
     except Exception as e:
         print(f"Error loading knowledge base: {e}")
     
@@ -750,7 +1823,7 @@ def save_knowledge_base(knowledge_base):
         with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
             json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
             
-        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
+        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents, {total_chars:,} characters")
     except Exception as e:
         print(f"❌ Error saving knowledge base: {e}")
 
@@ -826,8 +1899,8 @@ def add_document_compressed(file_path, filename, is_core=True):
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
         print(f"📊 Processing: {filename} ({file_size_mb:.1f}MB)")
         
-        # Use streaming processor for very large files on Standard tier
-        if file_size_mb > 50:  # Threshold for streaming (increased from 25MB)
+        # Use streaming processor for very large files with optimized threshold
+        if file_size_mb > COMPRESSION_THRESHOLD_MB:
             processor = StreamingPDFProcessor()
             result = processor.process_large_pdf_streaming(file_path)
             
@@ -927,52 +2000,103 @@ def add_document_compressed(file_path, filename, is_core=True):
     finally:
         gc.collect()
 
-def retrieve_compressed_content(doc_info: Dict, max_chars: int = 5000) -> str:
+# ================================
+# ENHANCED CONTENT RETRIEVAL - FIXED!
+# ================================
+
+def retrieve_compressed_content(doc_info: Dict, max_chars: int = 8000, query_context: str = "") -> str:
     """
-    Retrieve content from compressed documents
-    Only decompresses what's needed for performance
+    ENHANCED retrieval from compressed documents - FIXED VERSION
+    This is the key fix for your AI not seeing uploaded content!
     """
     try:
         content_type = doc_info.get('content_type', '')
+        filename = doc_info.get('filename', 'Unknown')
+        
+        print(f"🔍 Retrieving content from {filename} (type: {content_type})")
         
         if content_type == 'streaming_ultra_compressed':
             # Streaming compressed chunks
             compressed_chunks = doc_info.get('compressed_chunks', [])
-            compressor = AdvancedTextCompressor()
+            if not compressed_chunks:
+                print(f"⚠️ No compressed chunks found for {filename}")
+                return f"[No content available for {filename}]"
             
+            compressor = AdvancedTextCompressor()
             content_parts = []
             chars_retrieved = 0
             
-            for chunk_info in compressed_chunks:
+            # Get first few chunks for context
+            chunks_to_process = min(3, len(compressed_chunks))
+            
+            for i in range(chunks_to_process):
                 if chars_retrieved >= max_chars:
                     break
                     
-                compressed_data = chunk_info['compressed_data']
-                metadata = chunk_info['metadata']
+                chunk_info = compressed_chunks[i]
+                compressed_data = chunk_info.get('compressed_data', '')
+                metadata = chunk_info.get('metadata', {})
                 
-                decompressed_text = compressor.decompress(compressed_data, metadata)
-                content_parts.append(f"[Pages {chunk_info['page_range']}]\n{decompressed_text}")
+                if not compressed_data:
+                    continue
                 
-                chars_retrieved += len(decompressed_text)
+                try:
+                    decompressed_text = compressor.decompress(compressed_data, metadata)
+                    if decompressed_text and len(decompressed_text) > 50:  # Valid content
+                        chunk_header = f"\n[{filename} - Pages {chunk_info.get('page_range', 'Unknown')}]\n"
+                        content_parts.append(chunk_header + decompressed_text)
+                        chars_retrieved += len(decompressed_text)
+                        print(f"✅ Retrieved {len(decompressed_text)} chars from chunk {i}")
+                except Exception as e:
+                    print(f"⚠️ Error decompressing chunk {i}: {e}")
+                    continue
             
-            return "\n\n".join(content_parts)[:max_chars]
-            
+            if content_parts:
+                result = "\n\n".join(content_parts)[:max_chars]
+                print(f"✅ Total retrieved: {len(result)} characters from {filename}")
+                return result
+            else:
+                print(f"❌ Failed to retrieve any content from {filename}")
+                return f"[Could not retrieve content from {filename}]"
+                
         elif content_type == 'ultra_compressed':
             # Single compressed content
             compressed_content = doc_info.get('compressed_content', '')
             metadata = doc_info.get('compression_metadata', {})
             
-            compressor = AdvancedTextCompressor()
-            full_content = compressor.decompress(compressed_content, metadata)
+            if not compressed_content:
+                print(f"⚠️ No compressed content found for {filename}")
+                return f"[No content available for {filename}]"
             
-            return full_content[:max_chars]
+            try:
+                compressor = AdvancedTextCompressor()
+                full_content = compressor.decompress(compressed_content, metadata)
+                
+                if full_content and len(full_content) > 50:
+                    result = f"\n[From {filename}]\n" + full_content[:max_chars]
+                    print(f"✅ Retrieved {len(result)} characters from {filename}")
+                    return result
+                else:
+                    print(f"❌ Decompression returned empty content for {filename}")
+                    return f"[Could not decompress content from {filename}]"
+                    
+            except Exception as e:
+                print(f"❌ Error decompressing {filename}: {e}")
+                return f"[Error retrieving content from {filename}]"
         else:
             # Legacy uncompressed content
-            return doc_info.get('content', '')[:max_chars]
+            content = doc_info.get('content', '')
+            if content and len(content) > 50:
+                result = f"\n[From {filename}]\n" + content[:max_chars]
+                print(f"✅ Retrieved {len(result)} characters from {filename} (uncompressed)")
+                return result
+            else:
+                print(f"❌ No uncompressed content found for {filename}")
+                return f"[No content available for {filename}]"
             
     except Exception as e:
-        print(f"❌ Error retrieving compressed content: {e}")
-        return ""
+        print(f"❌ Error retrieving content from {doc_info.get('filename', 'unknown')}: {e}")
+        return f"[Error retrieving content: {str(e)}]"
 
 # ================================
 # USER DOCUMENT PERSISTENCE
@@ -981,7 +2105,7 @@ def retrieve_compressed_content(doc_info: Dict, max_chars: int = 5000) -> str:
 def add_personal_document_persistent(file_path, filename, user_id):
     """Add document to user's persistent personal collection"""
     try:
-        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=100)  # Increased for Standard tier
+        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=MAX_FILE_SIZE_MB)
         
         if "Error" in text_content or "too large" in text_content:
             return {"error": text_content}
@@ -1039,81 +2163,138 @@ def clear_user_documents(user_id):
         return result.rowcount
 
 # ================================
-# INTELLIGENT CONTEXT BUILDING
+# ENHANCED CONTEXT BUILDING - CRITICAL FIX!
 # ================================
 
-def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
-    """Build intelligent context from knowledge base + user history + personal docs"""
+def build_therapeutic_context(user_id, user_query, limit_kb_docs=5):
+    """
+    ENHANCED context building - THE KEY FIX for your AI not seeing uploads!
+    """
     context = ""
+    print(f"🔍 Building context for user {user_id} with query: {user_query[:50]}...")
     
-    # 1. Get user's conversation history for continuity
-    conversation_history = get_user_conversation_history(user_id, limit=10)
-    if conversation_history:
-        context += "\n=== CONVERSATION CONTINUITY ===\n"
-        context += "Previous conversation context (for therapeutic continuity):\n"
-        for msg in conversation_history[-5:]:  # Last 5 messages
-            role = "User" if msg['message_type'] == 'user' else "Therapist"
-            context += f"{role}: {msg['content'][:200]}...\n"
-    
-    # 2. Search knowledge base for relevant content
-    knowledge_base = load_knowledge_base()
-    relevant_docs = []
-    
-    if knowledge_base["documents"]:
-        query_words = user_query.lower().split()
+    try:
+        # 1. Get user's conversation history for continuity
+        conversation_history = get_user_conversation_history(user_id, limit=10)
+        if conversation_history:
+            context += "\n=== CONVERSATION CONTINUITY ===\n"
+            context += "Previous conversation context (for therapeutic continuity):\n"
+            for msg in conversation_history[-5:]:  # Last 5 messages
+                role = "User" if msg['message_type'] == 'user' else "Therapist"
+                context += f"{role}: {msg['content'][:200]}...\n"
         
-        for doc in knowledge_base["documents"]:
-            relevance_score = 0
-            
-            # Search in compressed content efficiently
-            if doc.get('content_type') in ['streaming_ultra_compressed', 'ultra_compressed']:
-                # Search in filename and authors for compressed docs
-                doc_text = (doc.get('filename', '') + ' ' + ' '.join(doc.get('extracted_authors', []))).lower()
-            else:
-                # Legacy uncompressed docs
-                doc_text = doc.get("content", "").lower()
-            
-            for word in query_words:
-                if len(word) > 3:
-                    relevance_score += doc_text.count(word)
-            
-            if relevance_score > 0:
-                relevant_docs.append((doc, relevance_score))
+        # 2. Search knowledge base for relevant content - ENHANCED!
+        knowledge_base = load_knowledge_base()
+        relevant_docs = []
         
-        # Sort by relevance and take top docs
-        relevant_docs.sort(key=lambda x: x[1], reverse=True)
-        relevant_docs = relevant_docs[:limit_kb_docs]
-    
-    # Add knowledge base content (UPDATED for compression)
-    if relevant_docs:
-        context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
-        for doc, score in relevant_docs:
-            # Use compressed content retrieval
-            content_snippet = retrieve_compressed_content(doc, max_chars=2000)
-            context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
+        print(f"📚 Knowledge base has {len(knowledge_base.get('documents', []))} documents")
+        
+        if knowledge_base.get("documents"):
+            query_words = user_query.lower().split()
+            print(f"🔍 Searching with query words: {query_words}")
             
-            # Track access in database
-            with get_db_connection() as conn:
-                conn.execute('''
-                    UPDATE knowledge_base_docs 
-                    SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
-                    WHERE id = ?
-                ''', (doc.get('id', ''),))
-                conn.commit()
-    
-    # 3. Add user's personal documents
-    user_docs = get_user_documents(user_id)
-    if user_docs:
-        context += "\n=== USER'S PERSONAL CONTEXT ===\n"
-        for doc in user_docs[:3]:  # Limit to recent docs
-            context += f"From your document '{doc['filename']}':\n{doc['content'][:1000]}...\n\n"
-    
-    # 4. Add authorized authors
-    if knowledge_base.get("authorized_authors"):
-        context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
-        context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
-    
-    return context[:15000]  # Limit total context size
+            for doc in knowledge_base["documents"]:
+                relevance_score = 0
+                filename = doc.get('filename', '').lower()
+                authors = ' '.join(doc.get('extracted_authors', [])).lower()
+                
+                # Enhanced search in filename and authors
+                search_text = filename + ' ' + authors
+                
+                # For compressed docs, try to search in first chunk if possible
+                if doc.get('content_type') == 'streaming_ultra_compressed':
+                    chunks = doc.get('compressed_chunks', [])
+                    if chunks:
+                        try:
+                            # Quick search in first chunk
+                            first_chunk = chunks[0]
+                            compressor = AdvancedTextCompressor()
+                            sample_text = compressor.decompress(
+                                first_chunk['compressed_data'], 
+                                first_chunk['metadata']
+                            )[:2000].lower()  # First 2000 chars only
+                            search_text += ' ' + sample_text
+                        except:
+                            pass  # If decompression fails, skip content search
+                elif doc.get('content_type') == 'ultra_compressed':
+                    try:
+                        compressed_content = doc.get('compressed_content', '')
+                        metadata = doc.get('compression_metadata', {})
+                        if compressed_content:
+                            compressor = AdvancedTextCompressor()
+                            sample_text = compressor.decompress(compressed_content, metadata)[:2000].lower()
+                            search_text += ' ' + sample_text
+                    except:
+                        pass
+                else:
+                    # Legacy uncompressed content
+                    content = doc.get("content", "")[:2000].lower()
+                    search_text += ' ' + content
+                
+                # Calculate relevance
+                for word in query_words:
+                    if len(word) > 3:
+                        relevance_score += search_text.count(word)
+                
+                # Always include some docs even with low relevance for testing
+                if relevance_score > 0 or len(relevant_docs) < 2:
+                    relevant_docs.append((doc, relevance_score))
+                    print(f"📄 Found relevant doc: {doc.get('filename', 'Unknown')} (score: {relevance_score})")
+            
+            # Sort by relevance and take top docs
+            relevant_docs.sort(key=lambda x: x[1], reverse=True)
+            relevant_docs = relevant_docs[:limit_kb_docs]
+        
+        # Add knowledge base content with ENHANCED retrieval
+        if relevant_docs:
+            context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
+            print(f"📚 Adding {len(relevant_docs)} relevant documents to context")
+            
+            for doc, score in relevant_docs:
+                try:
+                    # Use enhanced retrieval with more characters
+                    content_snippet = retrieve_compressed_content(doc, max_chars=4000, query_context=user_query)
+                    
+                    if content_snippet and len(content_snippet) > 50:
+                        context += f"\nFrom '{doc['filename']}':\n{content_snippet}\n\n"
+                        print(f"✅ Added content from {doc['filename']} ({len(content_snippet)} chars)")
+                        
+                        # Track access in database
+                        with get_db_connection() as conn:
+                            conn.execute('''
+                                UPDATE knowledge_base_docs 
+                                SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
+                                WHERE id = ?
+                            ''', (doc.get('id', ''),))
+                            conn.commit()
+                    else:
+                        print(f"⚠️ No content retrieved from {doc['filename']}")
+                        
+                except Exception as e:
+                    print(f"❌ Error retrieving content from {doc.get('filename', 'unknown')}: {e}")
+                    continue
+        else:
+            print("⚠️ No relevant documents found in knowledge base")
+        
+        # 3. Add user's personal documents
+        user_docs = get_user_documents(user_id)
+        if user_docs:
+            context += "\n=== USER'S PERSONAL CONTEXT ===\n"
+            for doc in user_docs[:2]:  # Limit to recent docs
+                context += f"From your document '{doc['filename']}':\n{doc['content'][:1500]}...\n\n"
+        
+        # 4. Add authorized authors
+        if knowledge_base.get("authorized_authors"):
+            context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
+            context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:15])}\n"
+        
+        print(f"✅ Context built: {len(context)} characters total")
+        return context[:25000]  # Increased limit for better context
+        
+    except Exception as e:
+        print(f"❌ Error building context: {e}")
+        traceback.print_exc()
+        return ""
 
 # ================================
 # API FUNCTIONS
@@ -1187,29 +2368,38 @@ def call_openai_direct(system_prompt, user_message):
         return f"Error: {str(e)}"
 
 def call_model_with_context(model, system, prompt, user_id):
-    """Enhanced model calling with persistent context"""
+    """ENHANCED model calling with persistent context - THE KEY FIX!"""
     try:
-        # Build intelligent context
+        print(f"🤖 Calling model with context for user {user_id}")
+        
+        # Build intelligent context - THIS IS THE CRITICAL FIX
         context = build_therapeutic_context(user_id, prompt)
         
-        if context:
-            system += f"\n\nTHERAPEUTIC CONTEXT SYSTEM:\n"
-            system += f"You have access to this user's therapeutic history and curated knowledge. "
-            system += f"Provide continuity and reference previous conversations when appropriate.\n\n"
-            system += context
+        if context and len(context) > 100:  # Only add if we have substantial context
+            enhanced_system = system + f"\n\n=== THERAPEUTIC CONTEXT SYSTEM ===\n"
+            enhanced_system += f"You have access to this user's therapeutic history and curated knowledge base. "
+            enhanced_system += f"Reference uploaded books and previous conversations when appropriate. "
+            enhanced_system += f"Draw from the specific uploaded content below:\n\n"
+            enhanced_system += context
+            
+            print(f"✅ Enhanced system prompt with {len(context)} chars of context")
+        else:
+            enhanced_system = system
+            print(f"⚠️ No context added - using base system prompt")
         
         # Call appropriate model
         if "gpt" in model:
             if not openai_api_key:
                 return "Error: OpenAI API key not configured"
-            return call_openai_direct(system, prompt)
+            return call_openai_direct(enhanced_system, prompt)
         else:
             if not claude_api_key:
                 return "Error: Claude API key not configured"
-            return call_claude_direct(system, prompt)
+            return call_claude_direct(enhanced_system, prompt)
             
     except Exception as e:
         print(f"Error calling model: {e}")
+        traceback.print_exc()
         return f"Error: {str(e)}"
 
 # ================================
@@ -1218,1012 +2408,3 @@ def call_model_with_context(model, system, prompt, user_id):
 
 def is_admin_user():
     return session.get("is_admin", False)
-
-# ================================
-# AUTHENTICATION ROUTES
-# ================================
-
-@app.route("/welcome", methods=["GET"])
-def welcome():
-    """Public landing page for new visitors"""
-    return render_template("welcome.html")
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    """User registration"""
-    if request.method == "POST":
-        try:
-            data = request.get_json() if request.is_json else request.form
-            
-            email = data.get("email", "").strip().lower()
-            username = data.get("username", "").strip()
-            password = data.get("password", "")
-            full_name = data.get("full_name", "").strip()
-            
-            # Validation
-            if not email or not username or not password or not full_name:
-                return jsonify({"error": "All fields are required"}), 400
-            
-            if len(password) < 8:
-                return jsonify({"error": "Password must be at least 8 characters"}), 400
-                
-            if "@" not in email or "." not in email:
-                return jsonify({"error": "Please enter a valid email address"}), 400
-            
-            # Check if user exists
-            with get_db_connection() as conn:
-                existing_user = conn.execute(
-                    'SELECT id FROM users WHERE email = ? OR username = ?', 
-                    (email, username)
-                ).fetchone()
-                
-                if existing_user:
-                    return jsonify({"error": "Email or username already exists"}), 400
-                
-                # Create new user
-                user_id = str(uuid.uuid4())
-                password_hash = hash_password(password)
-                
-                conn.execute('''
-                    INSERT INTO users (id, email, username, password_hash, full_name, is_verified)
-                    VALUES (?, ?, ?, ?, ?, 1)
-                ''', (user_id, email, username, password_hash, full_name))
-                conn.commit()
-                
-                # Log them in
-                session['user_id'] = user_id
-                session['authenticated'] = True
-                session['username'] = username
-                
-                print(f"✅ New user registered: {username} ({email})")
-                return jsonify({
-                    "success": True, 
-                    "message": "Account created successfully!",
-                    "redirect": "/"
-                })
-                
-        except Exception as e:
-            print(f"Registration error: {e}")
-            return jsonify({"error": "Registration failed. Please try again."}), 500
-    
-    return render_template("register.html")
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    """User login"""
-    if request.method == "POST":
-        try:
-            data = request.get_json() if request.is_json else request.form
-            
-            email_or_username = data.get("email_or_username", "").strip().lower()
-            password = data.get("password", "")
-            
-            if not email_or_username or not password:
-                return jsonify({"error": "Email/username and password are required"}), 400
-            
-            # Find user
-            with get_db_connection() as conn:
-                user = conn.execute('''
-                    SELECT * FROM users 
-                    WHERE (email = ? OR username = ?) AND is_active = 1
-                ''', (email_or_username, email_or_username)).fetchone()
-                
-                if not user or not user['password_hash'] or not verify_password(password, user['password_hash']):
-                    return jsonify({"error": "Invalid email/username or password"}), 401
-                
-                # Update last active
-                conn.execute(
-                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
-                    (user['id'],)
-                )
-                conn.commit()
-                
-                # Log them in
-                session['user_id'] = user['id']
-                session['authenticated'] = True
-                session['username'] = user['username']
-                
-                print(f"✅ User logged in: {user['username']}")
-                return jsonify({
-                    "success": True,
-                    "message": f"Welcome back, {user['full_name'] or user['username']}!",
-                    "redirect": "/"
-                })
-                
-        except Exception as e:
-            print(f"Login error: {e}")
-            return jsonify({"error": "Login failed. Please try again."}), 500
-    
-    return render_template("login.html")
-
-@app.route("/logout", methods=["GET", "POST"])
-def logout():
-    """User logout"""
-    username = session.get('username', 'User')
-    session.clear()
-    
-    if request.method == "POST":
-        return jsonify({"success": True, "message": "Logged out successfully"})
-    
-    return redirect('/welcome')
-
-@app.route("/profile", methods=["GET", "POST"])
-@require_login
-def profile():
-    """User profile management"""
-    user = get_authenticated_user()
-    if not user:
-        return redirect('/login')
-    
-    if request.method == "POST":
-        try:
-            data = request.get_json() if request.is_json else request.form
-            
-            full_name = data.get("full_name", "").strip()
-            therapy_goals = data.get("therapy_goals", "").strip()
-            
-            with get_db_connection() as conn:
-                conn.execute('''
-                    UPDATE users 
-                    SET full_name = ?, therapy_goals = ?
-                    WHERE id = ?
-                ''', (full_name, therapy_goals, user['id']))
-                conn.commit()
-            
-            return jsonify({"success": True, "message": "Profile updated successfully"})
-            
-        except Exception as e:
-            return jsonify({"error": "Failed to update profile"}), 500
-    
-    # Get user stats
-    with get_db_connection() as conn:
-        stats = conn.execute('''
-            SELECT 
-                COUNT(DISTINCT c.id) as total_conversations,
-                COUNT(DISTINCT d.id) as total_documents,
-                MAX(c.timestamp) as last_session
-            FROM users u
-            LEFT JOIN conversations c ON u.id = c.user_id
-            LEFT JOIN user_documents d ON u.id = d.user_id AND d.is_active = 1
-            WHERE u.id = ?
-        ''', (user['id'],)).fetchone()
-    
-    return render_template("profile.html", user=user, stats=dict(stats))
-
-# ================================
-# MAIN APPLICATION ROUTES
-# ================================
-
-@app.route("/", methods=["GET"])
-def root():
-    """Root route - hybrid support for authenticated and anonymous users"""
-    # If user is authenticated, go to chat
-    if session.get('authenticated'):
-        user = get_authenticated_user()
-        if user:
-            is_admin = is_admin_user()
-            return render_template("index.html", 
-                                 is_admin=is_admin, 
-                                 user_id=user['id'],
-                                 username=user.get('username', ''),
-                                 full_name=user.get('full_name', user.get('username', '')))
-    
-    # Legacy support for anonymous users OR create new anonymous user
-    if 'user_id' in session:
-        # Existing anonymous user - continue their session
-        user = get_or_create_user()
-        is_admin = is_admin_user()
-        return render_template("index.html", is_admin=is_admin, user_id=user['id'])
-    else:
-        # New visitor - create anonymous user and go directly to chat
-        user = get_or_create_user()
-        is_admin = is_admin_user()
-        return render_template("index.html", is_admin=is_admin, user_id=user['id'])
-
-@app.route("/admin", methods=["GET", "POST"])
-def admin():
-    """Admin panel"""
-    if request.method == "POST":
-        password = request.form.get("password")
-        if password == admin_password:
-            session["is_admin"] = True
-            return redirect("/admin")
-        else:
-            return render_template("admin_login.html", error="Invalid password")
-    
-    if not session.get("is_admin"):
-        return render_template("admin_login.html")
-    
-    knowledge_base = load_knowledge_base()
-    return render_template("admin_dashboard.html", 
-                         knowledge_base=knowledge_base,
-                         total_docs=len(knowledge_base["documents"]),
-                         authorized_authors=knowledge_base.get("authorized_authors", []))
-
-@app.route("/admin/logout", methods=["GET"])
-def admin_logout():
-    """Admin logout route"""
-    session.pop("is_admin", None)
-    return redirect("/")
-
-@app.route("/admin/batch-upload", methods=["GET"])
-def admin_batch_upload():
-    """Batch upload interface for multiple large PDFs"""
-    if not session.get("is_admin"):
-        return redirect("/admin")
-    
-    return render_template("batch_upload.html")
-
-@app.route("/chat", methods=["POST"])
-def chat():
-    """Chat endpoint - supports both authenticated and anonymous users"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        
-        # Increment session counter for authenticated users
-        if session.get('authenticated'):
-            with get_db_connection() as conn:
-                conn.execute(
-                    'UPDATE users SET total_sessions = total_sessions + 1 WHERE id = ?',
-                    (user_id,)
-                )
-                conn.commit()
-        
-        data = request.get_json()
-        user_input = data.get("user_input", "")
-        agent = data.get("agent", "")
-
-        print(f"Chat request - User: {user_id}, Input: {user_input[:100]}..., Agent: {agent}")
-
-        # Save user message
-        save_conversation_message(user_id, "user", user_input)
-
-        # Build system prompt based on agent
-        user_name = user.get('full_name') or user.get('username') or 'User'
-        base_instruction = f"You are a professional therapeutic AI supporting {user_name}. You have access to curated knowledge and conversation history. Provide continuity and reference previous conversations when appropriate."
-
-        agent_prompts = {
-            "case_assistant": f"{base_instruction} You assist with social work case analysis.",
-            "research_critic": f"{base_instruction} You critically evaluate research using evidence-based approaches.",
-            "therapy_planner": f"{base_instruction} You plan therapeutic interventions using proven methodologies.",
-            "therapist": f"{base_instruction} {config.get('claude_system_prompt', 'You provide therapeutic support.')}"
-        }
-
-        system_prompt = agent_prompts.get(agent, agent_prompts["therapist"])
-        model = config.get("claude_model", "claude-3-haiku-20240307")
-
-        # Get AI response with full context
-        response_text = call_model_with_context(model, system_prompt, user_input, user_id)
-        
-        # Save AI response
-        save_conversation_message(user_id, "assistant", response_text, agent)
-
-        return jsonify({
-            "response": response_text, 
-            "user_id": user_id,
-            "username": user.get('username', '')
-        })
-        
-    except Exception as e:
-        print(f"Error in chat endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# ================================
-# MEMORY-SAFE UPLOAD ROUTE - FIXED
-# ================================
-
-@app.route("/upload", methods=["POST"])
-def upload():
-    """Memory-safe file upload endpoint - FIXED VERSION"""
-    print(f"🔍 UPLOAD START - Memory limit enforced")
-    
-    try:
-        user = get_or_create_user()
-        if not user:
-            print("❌ No user session")
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        print(f"🔍 User ID: {user_id}")
-        
-        if "pdf" not in request.files:
-            print("❌ No PDF in request.files")
-            return jsonify({"message": "No file selected", "success": False})
-        
-        file = request.files["pdf"]
-        
-        if not file or not file.filename:
-            print("❌ No file or filename")
-            return jsonify({"message": "No file selected", "success": False})
-            
-        if not file.filename.lower().endswith(".pdf"):
-            print("❌ Not a PDF file")
-            return jsonify({"message": "Please select a PDF file", "success": False})
-        
-        upload_type = request.form.get("upload_type", "personal")
-        use_streaming = request.form.get("use_streaming", "false") == "true"
-        
-        # Check file size before processing
-        file.seek(0, 2)  # Seek to end
-        file_size = file.tell()
-        file.seek(0)  # Reset to beginning
-        file_size_mb = file_size / (1024 * 1024)
-        
-        print(f"🔍 File size: {file_size_mb:.1f}MB")
-        
-        # Enforce more generous limits for Standard tier
-        if upload_type == "admin" and file_size_mb > 200:
-            return jsonify({
-                "message": f"Admin file too large ({file_size_mb:.1f}MB). Maximum: 200MB",
-                "success": False
-            })
-        elif upload_type == "personal" and file_size_mb > 100:
-            return jsonify({
-                "message": f"Personal file too large ({file_size_mb:.1f}MB). Maximum: 100MB", 
-                "success": False
-            })
-        
-        if upload_type == "admin":
-            # ADMIN UPLOAD
-            if not is_admin_user():
-                print("❌ Not admin user")
-                return jsonify({
-                    "message": "Access denied. Admin privileges required.", 
-                    "success": False
-                }), 403
-            
-            print("🔍 Admin upload - saving file...")
-            file_path = os.path.join(UPLOADS_DIR, file.filename)
-            
-            # Ensure directory exists
-            os.makedirs(UPLOADS_DIR, exist_ok=True)
-            
-            # Save file
-            file.save(file_path)
-            print(f"✅ Admin file saved to: {file_path}")
-            
-            # Choose processing method based on size (Standard tier thresholds)
-            if use_streaming or file_size_mb > 50:  # 50MB threshold for Standard tier
-                print("🔍 Using compressed processing method")
-                doc_info = add_document_compressed(file_path, file.filename, is_core=True)
-            else:
-                print("🔍 Using legacy processing method")
-                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
-            
-            print(f"🔍 Admin document processing result: {doc_info}")
-            
-            if "error" in doc_info:
-                print(f"❌ Admin document processing error: {doc_info['error']}")
-                # Clean up uploaded file
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                return jsonify({"message": doc_info["error"], "success": False})
-            
-            # Clean up uploaded file
-            try:
-                os.remove(file_path)
-                print(f"🔍 Cleaned up admin temp file: {file_path}")
-            except Exception as e:
-                print(f"⚠️ Could not remove admin temp file: {e}")
-            
-            authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
-            compression_text = f" | {doc_info.get('compression_ratio', 0)}% compression" if doc_info.get('compression_ratio', 0) > 0 else ""
-            
-            return jsonify({
-                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){compression_text}{authors_text}", 
-                "success": True,
-                "type": "admin",
-                "extracted_authors": doc_info['extracted_authors'],
-                "compression_ratio": doc_info.get('compression_ratio', 0)
-            })
-        
-        else:
-            # PERSONAL UPLOAD
-            print("🔍 Personal document upload")
-            file_path = os.path.join(USER_UPLOADS_DIR, f"{user_id}_{file.filename}")
-            
-            # Ensure directory exists
-            os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
-            
-            # Save file
-            file.save(file_path)
-            print(f"✅ Personal file saved to: {file_path}")
-            
-            doc_info = add_personal_document_persistent(file_path, file.filename, user_id)
-            print(f"🔍 Personal document processing result: {doc_info}")
-            
-            if "error" in doc_info:
-                print(f"❌ Personal document processing error: {doc_info['error']}")
-                # Clean up uploaded file
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                return jsonify({"message": doc_info["error"], "success": False})
-            
-            # Clean up uploaded file
-            try:
-                os.remove(file_path)
-                print(f"🔍 Cleaned up personal temp file: {file_path}")
-            except Exception as e:
-                print(f"⚠️ Could not remove personal temp file: {e}")
-            
-            return jsonify({
-                "message": f"✅ Added '{file.filename}' to your persistent documents ({doc_info['character_count']} characters)", 
-                "success": True,
-                "type": "personal"
-            })
-        
-    except Exception as e:
-        print(f"❌ Upload exception: {str(e)}")
-        traceback.print_exc()
-        # Force memory cleanup on error
-        gc.collect()
-        return jsonify({
-            "error": f"Upload failed: {str(e)}", 
-            "success": False
-        }), 500
-
-# ================================
-# REMAINING ROUTES
-# ================================
-
-@app.route("/clear", methods=["POST"])
-def clear():
-    """Clear chat history"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        clear_user_conversation(user_id)
-        return jsonify({"message": "Chat history cleared (documents and progress retained)"})
-    except Exception as e:
-        print(f"Error in clear endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/clear-documents", methods=["POST"])
-def clear_documents():
-    """Clear personal documents"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        cleared_count = clear_user_documents(user_id)
-        return jsonify({"message": f"Cleared {cleared_count} personal documents"})
-    except Exception as e:
-        print(f"Error in clear documents endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/conversation-history", methods=["GET"])
-def get_conversation_history():
-    """Get user's persistent conversation history"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        history = get_user_conversation_history(user_id, limit=100)
-        return jsonify({"conversation_history": history, "user_id": user_id})
-    except Exception as e:
-        print(f"Error in conversation history endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/personal-documents", methods=["GET"])
-def get_personal_documents():
-    """Get user's persistent personal documents"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        docs = get_user_documents(user_id)
-        
-        # Return summary info (not full content for performance)
-        doc_summaries = [
-            {
-                "id": doc["id"],
-                "filename": doc["filename"],
-                "upload_date": doc["upload_date"],
-                "character_count": doc["character_count"]
-            }
-            for doc in docs
-        ]
-        
-        return jsonify({"personal_documents": doc_summaries, "user_id": user_id})
-    except Exception as e:
-        print(f"Error in personal documents endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/knowledge-base", methods=["GET"])
-def get_knowledge_base():
-    """Get knowledge base status"""
-    try:
-        knowledge_base = load_knowledge_base()
-        
-        # Get database stats
-        with get_db_connection() as conn:
-            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
-            active_users = conn.execute(
-                'SELECT COUNT(*) as count FROM users WHERE last_active > datetime("now", "-30 days")'
-            ).fetchone()['count']
-            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-        
-        return jsonify({
-            "total_documents": len(knowledge_base["documents"]),
-            "total_characters": knowledge_base.get("total_characters", 0),
-            "last_updated": knowledge_base.get("last_updated"),
-            "authorized_authors": knowledge_base.get("authorized_authors", []),
-            "total_authors": len(knowledge_base.get("authorized_authors", [])),
-            "system_stats": {
-                "total_users": total_users,
-                "active_users_30d": active_users,
-                "total_conversations": total_conversations
-            }
-        })
-    except Exception as e:
-        print(f"Error in knowledge base endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/user-stats", methods=["GET"])
-def get_user_stats():
-    """Get current user's statistics"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        
-        with get_db_connection() as conn:
-            conversation_count = conn.execute(
-                'SELECT COUNT(*) as count FROM conversations WHERE user_id = ?', (user_id,)
-            ).fetchone()['count']
-            
-            document_count = conn.execute(
-                'SELECT COUNT(*) as count FROM user_documents WHERE user_id = ? AND is_active = 1', (user_id,)
-            ).fetchone()['count']
-            
-            days_active = conn.execute('''
-                SELECT CAST((julianday('now') - julianday(created_at)) AS INTEGER) as days
-                FROM users WHERE id = ?
-            ''', (user_id,)).fetchone()['days']
-        
-        return jsonify({
-            "user_id": user_id,
-            "conversation_messages": conversation_count,
-            "personal_documents": document_count,
-            "days_active": days_active,
-            "created_at": user.get('created_at'),
-            "last_active": user.get('last_active')
-        })
-    except Exception as e:
-        print(f"Error in user stats endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/log", methods=["GET"])
-def get_log():
-    """Download user's conversation history"""
-    try:
-        user = get_or_create_user()
-        if not user:
-            return jsonify({"error": "User session required"}), 401
-        
-        user_id = user['id']
-        
-        # Get full conversation history
-        history = get_user_conversation_history(user_id, limit=1000)
-        
-        # Get user documents
-        docs = get_user_documents(user_id)
-        
-        # Format for download
-        export_data = {
-            "user_id": user_id,
-            "username": user.get('username', ''),
-            "full_name": user.get('full_name', ''),
-            "export_date": datetime.now().isoformat(),
-            "conversation_history": history,
-            "personal_documents": [
-                {
-                    "filename": doc["filename"],
-                    "upload_date": doc["upload_date"],
-                    "character_count": doc["character_count"]
-                }
-                for doc in docs
-            ],
-            "stats": {
-                "total_messages": len(history),
-                "total_documents": len(docs)
-            }
-        }
-        
-        return jsonify(export_data)
-    except Exception as e:
-        print(f"Error in log endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/health")
-def health():
-    """System health check with memory usage"""
-    try:
-        # Test API connections
-        openai_works = False
-        claude_works = False
-        
-        if openai_api_key:
-            try:
-                test_response = call_openai_direct("You are a test.", "Hello")
-                openai_works = not test_response.startswith("Error")
-            except:
-                pass
-        
-        if claude_api_key:
-            try:
-                test_response = call_claude_direct("You are a test.", "Hello")
-                claude_works = not test_response.startswith("Error")
-            except:
-                pass
-        
-        # Database stats
-        with get_db_connection() as conn:
-            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
-            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
-            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-            total_user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
-        
-        knowledge_base = load_knowledge_base()
-        
-        return jsonify({
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "apis": {
-                "openai_configured": openai_api_key is not None,
-                "openai_working": openai_works,
-                "claude_configured": claude_api_key is not None,
-                "claude_working": claude_works
-            },
-            "database": {
-                "total_users": total_users,
-                "authenticated_users": authenticated_users,
-                "anonymous_users": total_users - authenticated_users,
-                "total_conversations": total_conversations,
-                "total_user_documents": total_user_docs,
-                "knowledge_base_documents": len(knowledge_base["documents"]),
-                "authorized_authors": len(knowledge_base.get("authorized_authors", []))
-            },
-            "features": {
-                "user_authentication": True,
-                "anonymous_sessions": True,
-                "persistent_memory": True,
-                "conversation_continuity": True,
-                "personal_documents": True,
-                "knowledge_base": True,
-                "pdf_extraction": "pdfplumber",
-                "controlled_knowledge": True,
-                "large_pdf_support": True,
-                "compression_system": True,
-                "batch_upload": True,
-                "memory_safety": True
-            },
-            "memory_info": {
-                "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
-                "database_file": DATABASE_FILE,
-                "pdf_max_size_mb": 200,
-                "compression_enabled": True,
-                "memory_limit_mb": 2048,
-                "tier": "standard"
-            }
-        })
-    except Exception as e:
-        print(f"Error in health endpoint: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-# ================================
-# ADMIN DIAGNOSTIC ROUTES
-# ================================
-
-@app.route("/admin/check-permissions", methods=["GET"])
-def check_permissions():
-    """Check file system permissions and directory status"""
-    if not session.get("is_admin"):
-        return "Admin access required", 403
-    
-    checks = {}
-    
-    # Check if directories exist and are writable
-    for dir_name in [UPLOADS_DIR, CORE_MEMORY_DIR, USER_UPLOADS_DIR]:
-        checks[dir_name] = {
-            "exists": os.path.exists(dir_name),
-            "is_dir": os.path.isdir(dir_name) if os.path.exists(dir_name) else False,
-            "writable": os.access(dir_name, os.W_OK) if os.path.exists(dir_name) else False,
-            "contents": os.listdir(dir_name) if os.path.exists(dir_name) else []
-        }
-    
-    # Check knowledge base file
-    kb_file = os.path.join(CORE_MEMORY_DIR, "knowledge_base.json")
-    checks["knowledge_base.json"] = {
-        "exists": os.path.exists(kb_file),
-        "readable": os.access(kb_file, os.R_OK) if os.path.exists(kb_file) else False,
-        "writable": os.access(kb_file, os.W_OK) if os.path.exists(kb_file) else False,
-        "size": os.path.getsize(kb_file) if os.path.exists(kb_file) else 0
-    }
-    
-    # Check database file
-    checks["database"] = {
-        "exists": os.path.exists(DATABASE_FILE),
-        "readable": os.access(DATABASE_FILE, os.R_OK) if os.path.exists(DATABASE_FILE) else False,
-        "writable": os.access(DATABASE_FILE, os.W_OK) if os.path.exists(DATABASE_FILE) else False,
-        "size": os.path.getsize(DATABASE_FILE) if os.path.exists(DATABASE_FILE) else 0
-    }
-    
-    return f"<pre>{json.dumps(checks, indent=2)}</pre>"
-
-@app.route("/admin/debug-kb", methods=["GET"])
-def debug_knowledge_base():
-    """Debug knowledge base status"""
-    if not session.get("is_admin"):
-        return "Admin access required", 403
-    
-    debug_info = {
-        "knowledge_base_file_exists": os.path.exists(KNOWLEDGE_BASE_FILE),
-        "knowledge_base_file_size": 0,
-        "knowledge_base_content": {},
-        "uploads_dir_exists": os.path.exists(UPLOADS_DIR),
-        "uploads_dir_contents": [],
-        "database_stats": {},
-        "core_memory_dir_exists": os.path.exists(CORE_MEMORY_DIR),
-        "core_memory_contents": []
-    }
-    
-    # Check knowledge base file size
-    if os.path.exists(KNOWLEDGE_BASE_FILE):
-        debug_info["knowledge_base_file_size"] = os.path.getsize(KNOWLEDGE_BASE_FILE)
-        
-        # Try to read content
-        try:
-            with open(KNOWLEDGE_BASE_FILE, 'r') as f:
-                kb_content = json.load(f)
-                debug_info["knowledge_base_content"] = {
-                    "total_documents": len(kb_content.get("documents", [])),
-                    "total_authors": len(kb_content.get("authorized_authors", [])),
-                    "last_updated": kb_content.get("last_updated"),
-                    "total_characters": kb_content.get("total_characters", 0),
-                    "document_filenames": [doc.get("filename") for doc in kb_content.get("documents", [])]
-                }
-        except Exception as e:
-            debug_info["knowledge_base_error"] = str(e)
-    
-    # Check uploads directory
-    if os.path.exists(UPLOADS_DIR):
-        debug_info["uploads_dir_contents"] = os.listdir(UPLOADS_DIR)
-    
-    # Check core memory directory
-    if os.path.exists(CORE_MEMORY_DIR):
-        debug_info["core_memory_contents"] = os.listdir(CORE_MEMORY_DIR)
-    
-    # Check database
-    try:
-        with get_db_connection() as conn:
-            kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()
-            debug_info["database_stats"]["knowledge_base_docs"] = kb_docs['count']
-            
-            # Get recent uploads
-            recent_docs = conn.execute('''
-                SELECT filename, upload_date, character_count 
-                FROM knowledge_base_docs 
-                ORDER BY upload_date DESC 
-                LIMIT 5
-            ''').fetchall()
-            debug_info["database_stats"]["recent_uploads"] = [dict(doc) for doc in recent_docs]
-            
-    except Exception as e:
-        debug_info["database_error"] = str(e)
-    
-    return f"<pre>{json.dumps(debug_info, indent=2)}</pre>"
-
-@app.route("/admin/force-kb-refresh", methods=["POST"])
-def force_kb_refresh():
-    """Force refresh of knowledge base stats"""
-    if not session.get("is_admin"):
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        # Force reload and recalculate knowledge base
-        knowledge_base = load_knowledge_base()
-        save_knowledge_base(knowledge_base)  # This will recalculate stats
-        
-        return jsonify({
-            "success": True, 
-            "message": "Knowledge base stats refreshed",
-            "stats": {
-                "total_documents": len(knowledge_base["documents"]),
-                "total_characters": knowledge_base.get("total_characters", 0),
-                "total_authors": len(knowledge_base.get("authorized_authors", []))
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/admin/cleanup", methods=["POST"])
-def admin_cleanup():
-    """Admin endpoint for database maintenance"""
-    if not is_admin_user():
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        days_old = int(request.json.get("days_old", 90))
-        
-        with get_db_connection() as conn:
-            # Clean old inactive users (anonymous only)
-            old_users = conn.execute('''
-                DELETE FROM users 
-                WHERE last_active < datetime('now', '-{} days') 
-                AND email IS NULL
-                AND id NOT IN (SELECT DISTINCT user_id FROM conversations WHERE timestamp > datetime('now', '-30 days'))
-            '''.format(days_old))
-            
-            # Clean orphaned conversations
-            orphaned_convs = conn.execute('''
-                DELETE FROM conversations 
-                WHERE user_id NOT IN (SELECT id FROM users)
-            ''')
-            
-            # Clean orphaned documents
-            orphaned_docs = conn.execute('''
-                DELETE FROM user_documents 
-                WHERE user_id NOT IN (SELECT id FROM users)
-            ''')
-            
-            conn.commit()
-        
-        # Force garbage collection
-        gc.collect()
-        
-        return jsonify({
-            "message": "Database cleanup completed",
-            "removed": {
-                "old_anonymous_users": old_users.rowcount,
-                "orphaned_conversations": orphaned_convs.rowcount,
-                "orphaned_documents": orphaned_docs.rowcount
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ================================
-# BATCH UPLOAD SYSTEM
-# ================================
-
-@app.route("/admin/batch-process", methods=["POST"])
-def admin_batch_process():
-    """Process batch upload via API"""
-    if not is_admin_user():
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        # Get uploaded files
-        files = request.files.getlist('pdfs')
-        if not files:
-            return jsonify({"error": "No files uploaded"}), 400
-        
-        results = []
-        
-        for i, file in enumerate(files):
-            if file.filename and file.filename.lower().endswith('.pdf'):
-                try:
-                    # Save file temporarily
-                    temp_path = os.path.join(UPLOADS_DIR, f"batch_{i}_{file.filename}")
-                    file.save(temp_path)
-                    
-                    # Process with compression
-                    doc_info = add_document_compressed(temp_path, file.filename, is_core=True)
-                    
-                    if not doc_info.get('error'):
-                        results.append({
-                            'filename': file.filename,
-                            'status': 'success',
-                            'size_mb': doc_info.get('file_size_mb', 0),
-                            'compression_ratio': doc_info.get('compression_ratio', 0),
-                            'authors': doc_info.get('extracted_authors', [])
-                        })
-                    else:
-                        results.append({
-                            'filename': file.filename,
-                            'status': 'failed',
-                            'error': doc_info.get('error', 'Processing failed')
-                        })
-                    
-                    # Clean up temp file
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                        
-                except Exception as e:
-                    results.append({
-                        'filename': file.filename,
-                        'status': 'failed',
-                        'error': str(e)
-                    })
-        
-        # Calculate summary stats
-        successful = len([r for r in results if r['status'] == 'success'])
-        failed = len([r for r in results if r['status'] == 'failed'])
-        
-        return jsonify({
-            "success": True,
-            "message": f"Batch upload completed: {successful} successful, {failed} failed",
-            "results": results,
-            "summary": {
-                "total": len(results),
-                "successful": successful,
-                "failed": failed
-            }
-        })
-        
-    except Exception as e:
-        print(f"Batch upload error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# ================================
-# MEMORY-SAFE INITIALIZATION
-# ================================
-
-def initialize_system_safe():
-    """Initialize with memory safety measures"""
-    print("🚀 Initializing Memory-Safe Therapeutic AI...")
-    
-    # Set memory limits
-    limit_memory()
-    
-    # Initialize database
-    init_database()
-    
-    # Load knowledge base
-    knowledge_base = load_knowledge_base()
-    print(f"📚 Knowledge base loaded: {len(knowledge_base['documents'])} documents")
-    
-    # Check database health
-    try:
-        with get_db_connection() as conn:
-            total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
-            authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
-            total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-            print(f"👥 Database: {total_users} users ({authenticated_users} registered, {total_users - authenticated_users} anonymous), {total_conversations} conversations")
-    except Exception as e:
-        print(f"⚠️ Database check failed: {e}")
-    
-    # Force initial garbage collection
-    gc.collect()
-    
-    print("✅ Memory-safe Therapeutic AI initialized!")
-    print("🎯 Safety features active for Standard tier:")
-    print("   - 2GB memory limit")
-    print("   - 100MB PDF limit for personal uploads")
-    print("   - 200MB PDF limit for admin uploads")
-    print("   - 500 page limit per PDF")
-    print("   - Optimized garbage collection")
-    print("   - Enhanced error handling")
-
-# ================================
-# APPLICATION STARTUP
-# ================================
-
-if __name__ == "__main__":
-    initialize_system_safe()
-    app.run(host="0.0.0.0", port=5000, debug=False)  # Disable debug in production
-else:
-    initialize_system_safe()
-    application = app
