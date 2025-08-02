@@ -1066,18 +1066,18 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
             relevance_score = 0
             
             # USE UNCOMPRESSED CONTENT (compression disabled)
-doc_text = doc.get("content", "").lower()
+    doc_text = doc.get("content", "").lower()
             
-for word in query_words:
-                if len(word) > 3:
-                    relevance_score += doc_text.count(word)
+        for word in query_words:
+        if len(word) > 3:
+                relevance_score += doc_text.count(word)
             
-if relevance_score > 0:
-                relevant_docs.append((doc, relevance_score))
+        if relevance_score > 0:
+            relevant_docs.append((doc, relevance_score))
         
         # Sort by relevance and take top docs
-        relevant_docs.sort(key=lambda x: x[1], reverse=True)
-        relevant_docs = relevant_docs[:limit_kb_docs]
+    relevant_docs.sort(key=lambda x: x[1], reverse=True)
+    relevant_docs = relevant_docs[:limit_kb_docs]
     
     # Add knowledge base content (UPDATED for compression)
     if relevant_docs:
