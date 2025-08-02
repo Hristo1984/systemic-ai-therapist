@@ -6,8 +6,6 @@ import re
 import sqlite3
 import uuid
 import secrets
-import zlib
-import base64
 import tempfile
 import threading
 import time
@@ -152,1085 +150,7 @@ def init_database():
         conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
-                email TEXT UNIQUE,
-                username TEXT UNIQUE,
-                password_hash TEXT,
-                full_name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                preferences JSON,
-                therapy_goals TEXT,
-                is_active BOOLEAN DEFAULT 1,
-                is_verified BOOLEAN DEFAULT 1,
-                subscription_type TEXT DEFAULT 'free',
-                total_sessions INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # Add authentication columns to existing users (migration)
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN email TEXT')
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN username TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN full_name TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 1')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN subscription_type TEXT DEFAULT "free"')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN total_sessions INTEGER DEFAULT 0')
-        except sqlite3.OperationalError:
-            pass
-        
-        # Conversations table for persistent chat history
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                message_type TEXT, -- 'user' or 'assistant'
-                content TEXT,
-                agent_type TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                session_context JSON,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # User documents table for persistent personal documents
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_documents (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                filename TEXT,
-                content TEXT,
-                file_hash TEXT,
-                character_count INTEGER,
-                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Therapy progress tracking
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS therapy_progress (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                session_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                mood_score INTEGER,
-                progress_notes TEXT,
-                therapeutic_insights JSON,
-                goals_updated JSON,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Admin knowledge base metadata
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS knowledge_base_docs (
-                id TEXT PRIMARY KEY,
-                filename TEXT,
-                file_hash TEXT,
-                character_count INTEGER,
-                extracted_authors JSON,
-                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # User sessions for security
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                session_token TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Password reset tokens
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS password_resets (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                reset_token TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                used BOOLEAN DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        conn.commit()
-        print("✅ Enhanced user authentication database initialized")
-
-# ================================
-# USER MANAGEMENT SYSTEM (HYBRID)
-# ================================
-
-def get_or_create_user(session_id=None):
-    """Enhanced user management - supports both old anonymous and new authenticated users"""
-    # If user is authenticated, return authenticated user
-    if session.get('authenticated'):
-        user = get_authenticated_user()
-        if user:
-            return user
-    
-    # Legacy support for existing anonymous users
-    if 'user_id' not in session:
-        if session_id:
-            # Try to find existing user by session
-            with get_db_connection() as conn:
-                user = conn.execute(
-                    'SELECT * FROM users WHERE id = ?', (session_id,)
-                ).fetchone()
-                
-                if user:
-                    session['user_id'] = user['id']
-                    # Update last active
-                    conn.execute(
-                        'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
-                        (user['id'],)
-                    )
-                    conn.commit()
-                    return dict(user)
-        
-        # Create new anonymous user (legacy support)
-        user_id = str(uuid.uuid4())
-        session['user_id'] = user_id
-        
-        with get_db_connection() as conn:
-            conn.execute(
-                'INSERT INTO users (id) VALUES (?)', (user_id,)
-            )
-            conn.commit()
-            
-        print(f"✅ Created new anonymous user: {user_id}")
-        return {'id': user_id, 'created_at': datetime.now(), 'is_active': True}
-    
-    else:
-        # Get existing user
-        with get_db_connection() as conn:
-            user = conn.execute(
-                'SELECT * FROM users WHERE id = ?', (session['user_id'],)
-            ).fetchone()
-            
-            if user:
-                # Update last active
-                conn.execute(
-                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
-                    (user['id'],)
-                )
-                conn.commit()
-                return dict(user)
-            else:
-                # User doesn't exist, create new one
-                del session['user_id']
-                return get_or_create_user()
-
-# ================================
-# CONVERSATION PERSISTENCE
-# ================================
-
-def save_conversation_message(user_id, message_type, content, agent_type=None):
-    """Save conversation message to persistent storage"""
-    message_id = str(uuid.uuid4())
-    
-    with get_db_connection() as conn:
-        conn.execute('''
-            INSERT INTO conversations (id, user_id, message_type, content, agent_type)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (message_id, user_id, message_type, content, agent_type))
-        conn.commit()
-    
-    return message_id
-
-def get_user_conversation_history(user_id, limit=50):
-    """Retrieve user's conversation history"""
-    with get_db_connection() as conn:
-        messages = conn.execute('''
-            SELECT * FROM conversations 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT ?
-        ''', (user_id, limit)).fetchall()
-    
-    return [dict(msg) for msg in reversed(messages)]
-
-def clear_user_conversation(user_id):
-    """Clear user's conversation history"""
-    with get_db_connection() as conn:
-        conn.execute('DELETE FROM conversations WHERE user_id = ?', (user_id,))
-        conn.commit()
-
-# ================================
-# ADVANCED COMPRESSION SYSTEM
-# ================================
-
-class AdvancedTextCompressor:
-    """Advanced compression system for large therapeutic texts"""
-    
-    @staticmethod
-    def ultra_compress(text: str) -> Tuple[str, Dict]:
-        """
-        Ultra-high compression for large books
-        Achieves 85-95% compression on text-heavy PDFs
-        """
-        try:
-            # Step 1: Text normalization
-            normalized = AdvancedTextCompressor._normalize_text(text)
-            
-            # Step 2: Create dictionary of common therapeutic terms
-            term_dict, encoded_text = AdvancedTextCompressor._create_term_dictionary(normalized)
-            
-            # Step 3: Apply maximum zlib compression
-            text_bytes = encoded_text.encode('utf-8')
-            compressed = zlib.compress(text_bytes, level=9)
-            
-            # Step 4: Base64 encode for storage
-            compressed_b64 = base64.b64encode(compressed).decode('ascii')
-            
-            # Calculate compression stats
-            original_size = len(text)
-            final_size = len(compressed_b64)
-            compression_ratio = (1 - final_size / original_size) * 100
-            
-            metadata = {
-                'original_size': original_size,
-                'compressed_size': final_size,
-                'compression_ratio': round(compression_ratio, 1),
-                'term_dictionary': term_dict,
-                'normalization_applied': True
-            }
-            
-            print(f"🗜️ Ultra-compression: {original_size:,} → {final_size:,} bytes ({compression_ratio:.1f}% reduction)")
-            
-            return compressed_b64, metadata
-            
-        except Exception as e:
-            print(f"❌ Ultra-compression failed: {e}")
-            return text, {'compression_ratio': 0}
-    
-    @staticmethod
-    def _normalize_text(text: str) -> str:
-        """Normalize text for better compression"""
-        # Remove excessive whitespace
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Normalize page breaks and headers
-        text = re.sub(r'--- Page \d+ ---\n?', '\n[PAGE]\n', text)
-        
-        # Normalize common patterns
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        
-        return text.strip()
-    
-    @staticmethod
-    def _create_term_dictionary(text: str) -> Tuple[Dict, str]:
-        """Create dictionary of common therapeutic terms for compression"""
-        # Common therapeutic terms that appear frequently
-        therapeutic_terms = [
-            'therapy', 'therapeutic', 'therapist', 'treatment', 'intervention',
-            'relationship', 'relationships', 'couple', 'couples', 'family', 'families',
-            'marriage', 'marital', 'communication', 'conflict', 'attachment',
-            'emotional', 'behavior', 'behavioral', 'cognitive', 'systemic',
-            'counseling', 'counselor', 'psychology', 'psychological', 'psychologist',
-            'client', 'clients', 'patient', 'patients', 'session', 'sessions'
-        ]
-        
-        # Find frequently occurring phrases (3+ words)
-        words = re.findall(r'\b\w+\b', text.lower())
-        word_freq = Counter(words)
-        
-        # Create replacement dictionary for frequent terms
-        term_dict = {}
-        encoded_text = text
-        
-        # Replace most frequent therapeutic terms with short codes
-        for i, term in enumerate(therapeutic_terms):
-            if word_freq.get(term, 0) > 10:  # Appears 10+ times
-                code = f"T{i:02d}"
-                term_dict[code] = term
-                encoded_text = re.sub(r'\b' + re.escape(term) + r'\b', code, encoded_text, flags=re.IGNORECASE)
-        
-        return term_dict, encoded_text
-    
-    @staticmethod
-    def decompress(compressed_b64: str, metadata: Dict) -> str:
-        """Decompress ultra-compressed text"""
-        try:
-            # Decode and decompress
-            compressed_bytes = base64.b64decode(compressed_b64)
-            decompressed_bytes = zlib.decompress(compressed_bytes)
-            text = decompressed_bytes.decode('utf-8')
-            
-            # Restore term dictionary
-            if 'term_dictionary' in metadata:
-                term_dict = metadata['term_dictionary']
-                for code, term in term_dict.items():
-                    text = re.sub(r'\b' + re.escape(code) + r'\b', term, text)
-            
-            # Restore page markers
-            text = text.replace('[PAGE]', '--- Page ---')
-            
-            return text
-            
-        except Exception as e:
-            print(f"❌ Decompression failed: {e}")
-            return compressed_b64
-
-class StreamingPDFProcessor:
-    """Process large PDFs without loading everything into memory"""
-    
-    def __init__(self, max_memory_mb=500):
-        self.max_memory_mb = max_memory_mb
-        self.compressor = AdvancedTextCompressor()
-    
-    def process_large_pdf_streaming(self, file_path: str, chunk_size_pages=25) -> Dict:
-        """
-        Process very large PDFs using streaming approach
-        Processes in chunks and compresses immediately
-        """
-        try:
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            print(f"📚 Processing large PDF: {file_path} ({file_size_mb:.1f}MB)")
-            
-            if file_size_mb > 200:  # 200MB limit even with streaming
-                return {"error": f"PDF too large ({file_size_mb:.1f}MB). Maximum: 200MB"}
-            
-            compressed_chunks = []
-            total_pages = 0
-            total_original_size = 0
-            total_compressed_size = 0
-            authors = set()
-            
-            # Process PDF in streaming chunks
-            with pdfplumber.open(file_path) as pdf:
-                total_pdf_pages = len(pdf.pages)
-                print(f"📄 PDF has {total_pdf_pages} pages, processing in chunks of {chunk_size_pages}")
-                
-                for start_page in range(0, total_pdf_pages, chunk_size_pages):
-                    end_page = min(start_page + chunk_size_pages, total_pdf_pages)
-                    
-                    # Extract text from chunk
-                    chunk_text = self._extract_chunk_text(pdf, start_page, end_page)
-                    
-                    if chunk_text.strip():
-                        # Compress the chunk immediately
-                        compressed_chunk, metadata = self.compressor.ultra_compress(chunk_text)
-                        
-                        chunk_info = {
-                            'compressed_data': compressed_chunk,
-                            'metadata': metadata,
-                            'page_range': f"{start_page + 1}-{end_page}",
-                            'chunk_index': len(compressed_chunks)
-                        }
-                        
-                        compressed_chunks.append(chunk_info)
-                        
-                        # Update stats
-                        total_original_size += metadata['original_size']
-                        total_compressed_size += metadata['compressed_size']
-                        total_pages += (end_page - start_page)
-                        
-                        # Extract authors from first chunk
-                        if len(compressed_chunks) == 1:
-                            chunk_authors = extract_authors_from_text(chunk_text, os.path.basename(file_path))
-                            authors.update(chunk_authors)
-                    
-                    # Memory management
-                    if len(compressed_chunks) % 4 == 0:  # Every 4 chunks
-                        gc.collect()
-                        print(f"  Processed {end_page}/{total_pdf_pages} pages...")
-            
-            overall_compression = (1 - total_compressed_size / total_original_size) * 100 if total_original_size > 0 else 0
-            
-            result = {
-                'success': True,
-                'compressed_chunks': compressed_chunks,
-                'total_chunks': len(compressed_chunks),
-                'total_pages': total_pages,
-                'original_size': total_original_size,
-                'compressed_size': total_compressed_size,
-                'compression_ratio': round(overall_compression, 1),
-                'file_size_mb': round(file_size_mb, 2),
-                'extracted_authors': list(authors),
-                'processing_method': 'streaming_ultra_compressed'
-            }
-            
-            print(f"✅ Streaming processing complete: {total_original_size:,} → {total_compressed_size:,} bytes ({overall_compression:.1f}% compression)")
-            
-            return result
-            
-        except Exception as e:
-            error_msg = f"Streaming processing failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            return {"error": error_msg}
-        finally:
-            gc.collect()
-    
-    def _extract_chunk_text(self, pdf, start_page: int, end_page: int) -> str:
-        """Extract text from a chunk of PDF pages"""
-        chunk_text = ""
-        
-        for page_num in range(start_page, end_page):
-            try:
-                page = pdf.pages[page_num]
-                page_text = page.extract_text()
-                if page_text:
-                    chunk_text += f"\n--- Page {page_num + 1} ---\n"
-                    chunk_text += page_text.strip() + "\n"
-            except Exception as e:
-                print(f"  ⚠️ Error extracting page {page_num + 1}: {e}")
-                continue
-        
-        return chunk_text
-
-# ================================
-# MEMORY-SAFE PDF PROCESSING
-# ================================
-
-def extract_text_from_pdf_efficient(file_path, max_size_mb=200):  # INCREASED for Standard tier
-    """Memory-efficient PDF extraction with reasonable limits for Standard tier"""
-    try:
-        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
-        
-        # More generous limits for Standard tier
-        if file_size > max_size_mb:
-            return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
-        
-        text_content = ""
-        page_count = 0
-        
-        # Force garbage collection before starting
-        gc.collect()
-        
-        try:
-            with pdfplumber.open(file_path) as pdf:
-                total_pages = len(pdf.pages)
-                print(f"PDF has {total_pages} pages")
-                
-                # More generous page limits for Standard tier
-                max_pages = min(total_pages, 500)  # Max 500 pages (increased from 200)
-                if total_pages > max_pages:
-                    print(f"⚠️ Large PDF detected - processing first {max_pages} pages only")
-                
-                for page_num in range(max_pages):
-                    try:
-                        page = pdf.pages[page_num]
-                        page_text = page.extract_text()
-                        if page_text:
-                            text_content += f"\n--- Page {page_num + 1} ---\n"
-                            text_content += page_text.strip() + "\n"
-                            page_count += 1
-                        
-                        # Less aggressive memory management for Standard tier
-                        if page_num % 25 == 0:  # Every 25 pages
-                            gc.collect()
-                            
-                        # Progress indication
-                        if page_num % 50 == 0 and page_num > 0:
-                            print(f"Processed {page_num}/{max_pages} pages...")
-                            
-                        # Higher memory safety threshold for Standard tier
-                        if len(text_content) > 20 * 1024 * 1024:  # 20MB text limit (increased from 5MB)
-                            print("⚠️ Text content limit reached - stopping extraction")
-                            break
-                            
-                    except Exception as e:
-                        print(f"Error extracting page {page_num + 1}: {e}")
-                        continue
-                        
-        except Exception as pdf_error:
-            print(f"PDF processing error: {pdf_error}")
-            return f"Error processing PDF: {str(pdf_error)}"
-        
-        if not text_content.strip():
-            return f"No text could be extracted from {os.path.basename(file_path)}"
-        
-        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
-        return text_content
-        
-    except Exception as e:
-        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
-        print(f"❌ {error_msg}")
-        return error_msg
-    finally:
-        # ALWAYS force garbage collection
-        gc.collect()
-
-def extract_authors_from_text(text, filename):
-    """Extract author names from PDF text and filename"""
-    authors = set()
-    
-    # Common author extraction patterns
-    author_patterns = [
-        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",
-        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[-–—]\s*",
-        r"Author[s]?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
-    ]
-    
-    # Extract from filename
-    filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
-    if filename_match:
-        potential_author = filename_match.group(1).strip()
-        if len(potential_author.split()) >= 2:
-            authors.add(potential_author.title())
-    
-    # Extract from text content (first 3000 chars for efficiency)
-    search_text = text[:3000] if len(text) > 3000 else text
-    for pattern in author_patterns:
-        matches = re.findall(pattern, search_text)
-        for match in matches:
-            if len(match.split()) >= 2:
-                authors.add(match.strip())
-    
-    return list(authors)
-
-# ================================
-# KNOWLEDGE BASE SYSTEM
-# ================================
-
-def load_knowledge_base():
-    """Load admin knowledge base with fallback"""
-    try:
-        if os.path.exists(KNOWLEDGE_BASE_FILE):
-            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading knowledge base: {e}")
-    
-    return {
-        "documents": [],
-        "authorized_authors": [],
-        "last_updated": None,
-        "total_documents": 0,
-        "total_characters": 0
-    }
-
-def save_knowledge_base(knowledge_base):
-    """Save admin knowledge base with metadata"""
-    try:
-        knowledge_base["last_updated"] = datetime.now().isoformat()
-        knowledge_base["total_documents"] = len(knowledge_base["documents"])
-        
-        # Calculate total characters from both compressed and uncompressed docs
-        total_chars = 0
-        for doc in knowledge_base["documents"]:
-            if doc.get("content_type") == "streaming_ultra_compressed":
-                total_chars += doc.get("character_count", 0)
-            elif doc.get("content_type") == "ultra_compressed":
-                total_chars += doc.get("character_count", 0)
-            else:
-                total_chars += len(doc.get("content", ""))
-        
-        knowledge_base["total_characters"] = total_chars
-        
-        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
-            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
-            
-        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
-    except Exception as e:
-        print(f"❌ Error saving knowledge base: {e}")
-
-def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to admin knowledge base with database tracking (legacy method)"""
-    try:
-        # Extract text efficiently
-        text_content = extract_text_from_pdf_efficient(file_path)
-        
-        if "Error" in text_content or "too large" in text_content:
-            return {"error": text_content}
-        
-        # Extract authors
-        extracted_authors = extract_authors_from_text(text_content, filename)
-        
-        # Create document info
-        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-        doc_id = str(uuid.uuid4())
-        
-        doc_info = {
-            "id": doc_id,
-            "filename": filename,
-            "content": text_content,
-            "added_date": datetime.now().isoformat(),
-            "file_hash": file_hash,
-            "is_core": is_core,
-            "character_count": len(text_content),
-            "type": "admin_therapeutic_resource",
-            "extracted_authors": extracted_authors,
-            "pdf_extraction_status": "success"
-        }
-        
-        # Add to knowledge base
-        knowledge_base = load_knowledge_base()
-        knowledge_base["documents"].append(doc_info)
-        
-        # Update authorized authors
-        if "authorized_authors" not in knowledge_base:
-            knowledge_base["authorized_authors"] = []
-        
-        for author in extracted_authors:
-            if author not in knowledge_base["authorized_authors"]:
-                knowledge_base["authorized_authors"].append(author)
-                print(f"✅ Added authorized author: {author}")
-        
-        save_knowledge_base(knowledge_base)
-        
-        # Track in database
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT INTO knowledge_base_docs 
-                (id, filename, file_hash, character_count, extracted_authors)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
-            conn.commit()
-        
-        print(f"✅ Added {filename} to knowledge base ({len(text_content)} characters)")
-        return doc_info
-        
-    except Exception as e:
-        error_msg = f"Error adding document: {str(e)}"
-        print(f"❌ {error_msg}")
-        return {"error": error_msg}
-    finally:
-        gc.collect()
-
-def add_document_compressed(file_path, filename, is_core=True):
-    """
-    Add document with compression and smart storage
-    Reduces memory usage by 70-90%
-    """
-    try:
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        print(f"📊 Processing: {filename} ({file_size_mb:.1f}MB)")
-        
-        # Use streaming processor for very large files on Standard tier
-        if file_size_mb > 50:  # Threshold for streaming (increased from 25MB)
-            processor = StreamingPDFProcessor()
-            result = processor.process_large_pdf_streaming(file_path)
-            
-            if not result.get('success'):
-                return {"error": result.get('error', 'Processing failed')}
-            
-            # Create document info for streaming result
-            file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-            doc_id = str(uuid.uuid4())
-            
-            doc_info = {
-                "id": doc_id,
-                "filename": filename,
-                "content_type": "streaming_ultra_compressed",
-                "compressed_chunks": result['compressed_chunks'],
-                "total_chunks": result['total_chunks'],
-                "added_date": datetime.now().isoformat(),
-                "file_hash": file_hash,
-                "is_core": is_core,
-                "character_count": result['original_size'],
-                "compressed_size": result['compressed_size'],
-                "compression_ratio": result['compression_ratio'],
-                "total_pages": result['total_pages'],
-                "file_size_mb": result['file_size_mb'],
-                "type": "admin_therapeutic_resource",
-                "extracted_authors": result['extracted_authors'],
-                "pdf_extraction_status": "success_streaming_compressed",
-                "processing_method": result['processing_method']
-            }
-        else:
-            # Use regular processing for smaller files with compression
-            text_content = extract_text_from_pdf_efficient(file_path)
-            
-            if "Error" in text_content or "too large" in text_content:
-                return {"error": text_content}
-            
-            # Compress the content
-            compressor = AdvancedTextCompressor()
-            compressed_content, metadata = compressor.ultra_compress(text_content)
-            
-            # Extract authors
-            extracted_authors = extract_authors_from_text(text_content, filename)
-            
-            # Create document info
-            file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-            doc_id = str(uuid.uuid4())
-            
-            doc_info = {
-                "id": doc_id,
-                "filename": filename,
-                "content_type": "ultra_compressed",
-                "compressed_content": compressed_content,
-                "compression_metadata": metadata,
-                "added_date": datetime.now().isoformat(),
-                "file_hash": file_hash,
-                "is_core": is_core,
-                "character_count": metadata['original_size'],
-                "compressed_size": metadata['compressed_size'],
-                "compression_ratio": metadata['compression_ratio'],
-                "type": "admin_therapeutic_resource",
-                "extracted_authors": extracted_authors,
-                "pdf_extraction_status": "success_compressed",
-                "file_size_mb": round(file_size_mb, 2)
-            }
-        
-        # Add to knowledge base
-        knowledge_base = load_knowledge_base()
-        knowledge_base["documents"].append(doc_info)
-        
-        # Update authorized authors
-        if "authorized_authors" not in knowledge_base:
-            knowledge_base["authorized_authors"] = []
-        
-        for author in doc_info['extracted_authors']:
-            if author not in knowledge_base["authorized_authors"]:
-                knowledge_base["authorized_authors"].append(author)
-                print(f"✅ Added authorized author: {author}")
-        
-        save_knowledge_base(knowledge_base)
-        
-        # Track in database
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT INTO knowledge_base_docs 
-                (id, filename, file_hash, character_count, extracted_authors)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (doc_id, filename, file_hash, doc_info['character_count'], json.dumps(doc_info['extracted_authors'])))
-            conn.commit()
-        
-        print(f"✅ Added {filename} to knowledge base ({doc_info['character_count']:,} chars, {doc_info['compression_ratio']}% compression)")
-        return doc_info
-        
-    except Exception as e:
-        error_msg = f"Error adding document: {str(e)}"
-        print(f"❌ {error_msg}")
-        return {"error": error_msg}
-    finally:
-        gc.collect()
-
-def retrieve_compressed_content(doc_info: Dict, max_chars: int = 25000) -> str:
-    """
-    Retrieve content from compressed documents
-    Only decompresses what's needed for performance
-    """
-    try:
-        content_type = doc_info.get('content_type', '')
-        
-        if content_type == 'streaming_ultra_compressed':
-            # Streaming compressed chunks
-            compressed_chunks = doc_info.get('compressed_chunks', [])
-            compressor = AdvancedTextCompressor()
-            
-            content_parts = []
-            chars_retrieved = 0
-            
-            for chunk_info in compressed_chunks:
-                if chars_retrieved >= max_chars:
-                    break
-                    
-                compressed_data = chunk_info['compressed_data']
-                metadata = chunk_info['metadata']
-                
-                decompressed_text = compressor.decompress(compressed_data, metadata)
-                content_parts.append(f"[Pages {chunk_info['page_range']}]\n{decompressed_text}")
-                
-                chars_retrieved += len(decompressed_text)
-            
-            return "\n\n".join(content_parts)[:max_chars]
-            
-        elif content_type == 'ultra_compressed':
-            # Single compressed content
-            compressed_content = doc_info.get('compressed_content', '')
-            metadata = doc_info.get('compression_metadata', {})
-            
-            compressor = AdvancedTextCompressor()
-            full_content = compressor.decompress(compressed_content, metadata)
-            
-            return full_content[:max_chars]
-        else:
-            # Legacy uncompressed content
-            return doc_info.get('content', '')[:max_chars]
-            
-    except Exception as e:
-        print(f"❌ Error retrieving compressed content: {e}")
-        return ""
-
-# ================================
-# USER DOCUMENT PERSISTENCE
-# ================================
-
-def add_personal_document_persistent(file_path, filename, user_id):
-    """Add document to user's persistent personal collection"""
-    try:
-        text_content = extract_text_from_pdf_efficient(file_path, max_size_mb=100)  # Increased for Standard tier
-        
-        if "Error" in text_content or "too large" in text_content:
-            return {"error": text_content}
-        
-        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
-        doc_id = str(uuid.uuid4())
-        
-        # Save to database
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT INTO user_documents 
-                (id, user_id, filename, content, file_hash, character_count)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (doc_id, user_id, filename, text_content, file_hash, len(text_content)))
-            conn.commit()
-        
-        doc_info = {
-            "id": doc_id,
-            "filename": filename,
-            "content": text_content,
-            "file_hash": file_hash,
-            "character_count": len(text_content),
-            "upload_date": datetime.now().isoformat(),
-            "type": "user_personal_document"
-        }
-        
-        print(f"✅ Added {filename} to user {user_id} ({len(text_content)} characters)")
-        return doc_info
-        
-    except Exception as e:
-        error_msg = f"Error adding personal document: {str(e)}"
-        print(f"❌ {error_msg}")
-        return {"error": error_msg}
-    finally:
-        gc.collect()
-
-def get_user_documents(user_id):
-    """Get user's persistent personal documents"""
-    with get_db_connection() as conn:
-        docs = conn.execute('''
-            SELECT * FROM user_documents 
-            WHERE user_id = ? AND is_active = 1
-            ORDER BY upload_date DESC
-        ''', (user_id,)).fetchall()
-    
-    return [dict(doc) for doc in docs]
-
-def clear_user_documents(user_id):
-    """Clear user's personal documents"""
-    with get_db_connection() as conn:
-        result = conn.execute(
-            'UPDATE user_documents SET is_active = 0 WHERE user_id = ?', (user_id,)
-        )
-        conn.commit()
-        return result.rowcount
-
-# ================================
-# INTELLIGENT CONTEXT BUILDING
-# ================================
-
-def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
-    """Build intelligent context from knowledge base + user history + personal docs"""
-    context = ""
-    
-    # 1. Get user's conversation history for continuity
-    conversation_history = get_user_conversation_history(user_id, limit=10)
-    if conversation_history:
-        context += "\n=== CONVERSATION CONTINUITY ===\n"
-        context += "Previous conversation context (for therapeutic continuity):\n"
-        for msg in conversation_history[-5:]:  # Last 5 messages
-            role = "User" if msg['message_type'] == 'user' else "Therapist"
-            context += f"{role}: {msg['content'][:200]}...\n"
-    
-    # 2. Search knowledge base for relevant content
-    knowledge_base = load_knowledge_base()
-    relevant_docs = []
-    
-    if knowledge_base["documents"]:
-        query_words = user_query.lower().split()
-        
-        for doc in knowledge_base["documents"]:
-            relevance_score = 0
-            
-            # USE UNCOMPRESSED CONTENT (compression disabled)
-    doc_text = doc.get("content", "").lower()
-            
-    for word in query_words:
-        if len(word) > 3:
-            relevance_score += doc_text.count(word)
-            
-    if relevance_score > 0:
-        relevant_docs.append((doc, relevance_score))
-        
-        # Sort by relevance and take top docs
-    relevant_docs.sort(key=lambda x: x[1], reverse=True)
-    relevant_docs = relevant_docs[:limit_kb_docs]
-    
-    # Add knowledge base content (UPDATED for compression)
-    if relevant_docs:
-        context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
-        for doc, score in relevant_docs:
-            # Use compressed content retrieval
-            content = doc.get("content", "")[:25000]
-            context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
-            
-            # Track access in database
-            with get_db_connection() as conn:
-                conn.execute('''
-                    UPDATE knowledge_base_docs 
-                    SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
-                    WHERE id = ?
-                ''', (doc.get('id', ''),))
-                conn.commit()
-    
-    # 3. Add user's personal documents
-    user_docs = get_user_documents(user_id)
-    if user_docs:
-        context += "\n=== USER'S PERSONAL CONTEXT ===\n"
-        for doc in user_docs[:3]:  # Limit to recent docs
-            context += f"From your document '{doc['filename']}':\n{doc['content'][:1000]}...\n\n"
-    
-    # 4. Add authorized authors
-    if knowledge_base.get("authorized_authors"):
-        context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
-        context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
-    
-    return context[:75000]  # Limit total context size
-
-# ================================
-# API FUNCTIONS
-# ================================
-
-def call_claude_direct(system_prompt, user_message):
-    try:
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": claude_api_key,
-            "anthropic-version": "2023-06-01"
-        }
-        
-        data = {
-            "model": "claude-3-haiku-20240307",
-            "max_tokens": 1024,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_message}]
-        }
-        
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=data,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result["content"][0]["text"]
-        else:
-            print(f"Claude API error: {response.status_code}")
-            return f"Error calling Claude API: {response.status_code}"
-            
-    except Exception as e:
-        print(f"Error in Claude call: {e}")
-        return f"Error: {str(e)}"
-
-def call_openai_direct(system_prompt, user_message):
-    try:
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai_api_key}"
-        }
-        
-        data = {
-            "model": "gpt-4",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-            "max_tokens": 1024
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=data,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
-        else:
-            print(f"OpenAI API error: {response.status_code}")
-            return f"Error calling OpenAI API: {response.status_code}"
-            
-    except Exception as e:
-        print(f"Error in OpenAI call: {e}")
-        return f"Error: {str(e)}"
-
-def call_model_with_context(model, system, prompt, user_id):
-    """Enhanced model calling with persistent context"""
-    try:
-        # Build intelligent context
-        context = build_therapeutic_context(user_id, prompt)
-        
-        if context:
-            system += f"\n\nTHERAPEUTIC CONTEXT SYSTEM:\n"
-            system += f"You have access to this user's therapeutic history and curated knowledge. "
-            system += f"Provide continuity and reference previous conversations when appropriate.\n\n"
-            system += context
-        
-        # Call appropriate model
-        if "gpt" in model:
-            if not openai_api_key:
-                return "Error: OpenAI API key not configured"
-            return call_openai_direct(system, prompt)
-        else:
-            if not claude_api_key:
-                return "Error: Claude API key not configured"
-            return call_claude_direct(system, prompt)
-            
-    except Exception as e:
-        print(f"Error calling model: {e}")
-        return f"Error: {str(e)}"
-
-# ================================
-# ADMIN FUNCTIONS
-# ================================
-
-def is_admin_user():
-    return session.get("is_admin", False)
-
-# ================================
-# AUTHENTICATION ROUTES
-# ================================
-
-@app.route("/welcome", methods=["GET"])
-def welcome():
-    """Public landing page for new visitors"""
-    return render_template("welcome.html")
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    """User registration"""
-    if request.method == "POST":
-        try:
-            data = request.get_json() if request.is_json else request.form
-            
-            email = data.get("email", "").strip().lower()
+                email = data.get("email", "").strip().lower()
             username = data.get("username", "").strip()
             password = data.get("password", "")
             full_name = data.get("full_name", "").strip()
@@ -1508,13 +428,13 @@ def chat():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# MEMORY-SAFE UPLOAD ROUTE - FIXED
+# SIMPLIFIED UPLOAD ROUTE
 # ================================
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """Memory-safe file upload endpoint - FIXED VERSION"""
-    print(f"🔍 UPLOAD START - Memory limit enforced")
+    """Simplified file upload endpoint without compression"""
+    print(f"🔍 UPLOAD START - Simple processing")
     
     try:
         user = get_or_create_user()
@@ -1540,7 +460,6 @@ def upload():
             return jsonify({"message": "Please select a PDF file", "success": False})
         
         upload_type = request.form.get("upload_type", "personal")
-        use_streaming = request.form.get("use_streaming", "false") == "true"
         
         # Check file size before processing
         file.seek(0, 2)  # Seek to end
@@ -1550,7 +469,7 @@ def upload():
         
         print(f"🔍 File size: {file_size_mb:.1f}MB")
         
-        # Enforce more generous limits for Standard tier
+        # Enforce file size limits
         if upload_type == "admin" and file_size_mb > 200:
             return jsonify({
                 "message": f"Admin file too large ({file_size_mb:.1f}MB). Maximum: 200MB",
@@ -1581,9 +500,9 @@ def upload():
             file.save(file_path)
             print(f"✅ Admin file saved to: {file_path}")
             
-            # FORCE LEGACY PROCESSING (no compression)
-print("🔍 Using legacy processing method (compression disabled)")
-doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
+            # Process document without compression
+            print("🔍 Using simple processing method (no compression)")
+            doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
             
             print(f"🔍 Admin document processing result: {doc_info}")
             
@@ -1594,7 +513,7 @@ doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True
                     os.remove(file_path)
                 except:
                     pass
-                    return jsonify({"message": doc_info["error"], "success": False})
+                return jsonify({"message": doc_info["error"], "success": False})
             
             # Clean up uploaded file
             try:
@@ -1604,14 +523,12 @@ doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True
                 print(f"⚠️ Could not remove admin temp file: {e}")
             
             authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
-            compression_text = f" | {doc_info.get('compression_ratio', 0)}% compression" if doc_info.get('compression_ratio', 0) > 0 else ""
             
             return jsonify({
-                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){compression_text}{authors_text}", 
+                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']} characters){authors_text}", 
                 "success": True,
                 "type": "admin",
-                "extracted_authors": doc_info['extracted_authors'],
-                "compression_ratio": doc_info.get('compression_ratio', 0)
+                "extracted_authors": doc_info['extracted_authors']
             })
         
         else:
@@ -1626,7 +543,7 @@ doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True
             file.save(file_path)
             print(f"✅ Personal file saved to: {file_path}")
             
-            doc_info = add_personal_document_persistent(file_path, file.filename, user_id)
+            doc_info = add_personal_document_simple(file_path, file.filename, user_id)
             print(f"🔍 Personal document processing result: {doc_info}")
             
             if "error" in doc_info:
@@ -1847,7 +764,7 @@ def get_log():
 
 @app.route("/health")
 def health():
-    """System health check with memory usage"""
+    """System health check"""
     try:
         # Test API connections
         openai_works = False
@@ -1904,7 +821,7 @@ def health():
                 "pdf_extraction": "pdfplumber",
                 "controlled_knowledge": True,
                 "large_pdf_support": True,
-                "compression_system": True,
+                "compression_system": False,  # DISABLED
                 "batch_upload": True,
                 "memory_safety": True
             },
@@ -1912,7 +829,7 @@ def health():
                 "knowledge_base_size_mb": round(knowledge_base.get("total_characters", 0) / 1024 / 1024, 2),
                 "database_file": DATABASE_FILE,
                 "pdf_max_size_mb": 200,
-                "compression_enabled": True,
+                "compression_enabled": False,  # DISABLED
                 "memory_limit_mb": 2048,
                 "tier": "standard"
             }
@@ -2094,12 +1011,12 @@ def admin_cleanup():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# BATCH UPLOAD SYSTEM
+# SIMPLIFIED BATCH UPLOAD SYSTEM
 # ================================
 
 @app.route("/admin/batch-process", methods=["POST"])
 def admin_batch_process():
-    """Process batch upload via API"""
+    """Process batch upload via API - SIMPLIFIED VERSION"""
     if not is_admin_user():
         return jsonify({"error": "Admin access required"}), 403
     
@@ -2118,15 +1035,15 @@ def admin_batch_process():
                     temp_path = os.path.join(UPLOADS_DIR, f"batch_{i}_{file.filename}")
                     file.save(temp_path)
                     
-                    # Process with compression
-                    doc_info = add_document_compressed(temp_path, file.filename, is_core=True)
+                    # Process without compression
+                    doc_info = add_document_to_knowledge_base(temp_path, file.filename, is_core=True)
                     
                     if not doc_info.get('error'):
                         results.append({
                             'filename': file.filename,
                             'status': 'success',
-                            'size_mb': doc_info.get('file_size_mb', 0),
-                            'compression_ratio': doc_info.get('compression_ratio', 0),
+                            'size_mb': round(os.path.getsize(temp_path) / 1024 / 1024, 2),
+                            'character_count': doc_info.get('character_count', 0),
                             'authors': doc_info.get('extracted_authors', [])
                         })
                     else:
@@ -2169,12 +1086,12 @@ def admin_batch_process():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# MEMORY-SAFE INITIALIZATION
+# SIMPLE INITIALIZATION
 # ================================
 
-def initialize_system_safe():
-    """Initialize with memory safety measures"""
-    print("🚀 Initializing Memory-Safe Therapeutic AI...")
+def initialize_system_simple():
+    """Initialize with simple processing (no compression)"""
+    print("🚀 Initializing Simple Therapeutic AI...")
     
     # Set memory limits
     limit_memory()
@@ -2199,13 +1116,14 @@ def initialize_system_safe():
     # Force initial garbage collection
     gc.collect()
     
-    print("✅ Memory-safe Therapeutic AI initialized!")
-    print("🎯 Safety features active for Standard tier:")
+    print("✅ Simple Therapeutic AI initialized!")
+    print("🎯 Features active:")
     print("   - 2GB memory limit")
     print("   - 100MB PDF limit for personal uploads")
     print("   - 200MB PDF limit for admin uploads")
-    print("   - 500 page limit per PDF")
-    print("   - Optimized garbage collection")
+    print("   - 1000 page limit per PDF")
+    print("   - Simple text extraction (NO COMPRESSION)")
+    print("   - Direct content storage")
     print("   - Enhanced error handling")
 
 # ================================
@@ -2213,8 +1131,699 @@ def initialize_system_safe():
 # ================================
 
 if __name__ == "__main__":
-    initialize_system_safe()
+    initialize_system_simple()
     app.run(host="0.0.0.0", port=5000, debug=False)  # Disable debug in production
 else:
-    initialize_system_safe()
-    application = app
+    initialize_system_simple()
+    application = app TEXT UNIQUE,
+                username TEXT UNIQUE,
+                password_hash TEXT,
+                full_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                preferences JSON,
+                therapy_goals TEXT,
+                is_active BOOLEAN DEFAULT 1,
+                is_verified BOOLEAN DEFAULT 1,
+                subscription_type TEXT DEFAULT 'free',
+                total_sessions INTEGER DEFAULT 0
+            )
+        ''')
+        
+        # Add authentication columns to existing users (migration)
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN email TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN username TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN full_name TEXT')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 1')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN subscription_type TEXT DEFAULT "free"')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN total_sessions INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        
+        # Conversations table for persistent chat history
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                message_type TEXT, -- 'user' or 'assistant'
+                content TEXT,
+                agent_type TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                session_context JSON,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # User documents table for persistent personal documents
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                filename TEXT,
+                content TEXT,
+                file_hash TEXT,
+                character_count INTEGER,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Therapy progress tracking
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS therapy_progress (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                mood_score INTEGER,
+                progress_notes TEXT,
+                therapeutic_insights JSON,
+                goals_updated JSON,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Admin knowledge base metadata
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge_base_docs (
+                id TEXT PRIMARY KEY,
+                filename TEXT,
+                file_hash TEXT,
+                character_count INTEGER,
+                extracted_authors JSON,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                access_count INTEGER DEFAULT 0
+            )
+        ''')
+        
+        # User sessions for security
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_token TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Password reset tokens
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                reset_token TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                used BOOLEAN DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        conn.commit()
+        print("✅ Enhanced user authentication database initialized")
+
+# ================================
+# USER MANAGEMENT SYSTEM (HYBRID)
+# ================================
+
+def get_or_create_user(session_id=None):
+    """Enhanced user management - supports both old anonymous and new authenticated users"""
+    # If user is authenticated, return authenticated user
+    if session.get('authenticated'):
+        user = get_authenticated_user()
+        if user:
+            return user
+    
+    # Legacy support for existing anonymous users
+    if 'user_id' not in session:
+        if session_id:
+            # Try to find existing user by session
+            with get_db_connection() as conn:
+                user = conn.execute(
+                    'SELECT * FROM users WHERE id = ?', (session_id,)
+                ).fetchone()
+                
+                if user:
+                    session['user_id'] = user['id']
+                    # Update last active
+                    conn.execute(
+                        'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                        (user['id'],)
+                    )
+                    conn.commit()
+                    return dict(user)
+        
+        # Create new anonymous user (legacy support)
+        user_id = str(uuid.uuid4())
+        session['user_id'] = user_id
+        
+        with get_db_connection() as conn:
+            conn.execute(
+                'INSERT INTO users (id) VALUES (?)', (user_id,)
+            )
+            conn.commit()
+            
+        print(f"✅ Created new anonymous user: {user_id}")
+        return {'id': user_id, 'created_at': datetime.now(), 'is_active': True}
+    
+    else:
+        # Get existing user
+        with get_db_connection() as conn:
+            user = conn.execute(
+                'SELECT * FROM users WHERE id = ?', (session['user_id'],)
+            ).fetchone()
+            
+            if user:
+                # Update last active
+                conn.execute(
+                    'UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?',
+                    (user['id'],)
+                )
+                conn.commit()
+                return dict(user)
+            else:
+                # User doesn't exist, create new one
+                del session['user_id']
+                return get_or_create_user()
+
+# ================================
+# CONVERSATION PERSISTENCE
+# ================================
+
+def save_conversation_message(user_id, message_type, content, agent_type=None):
+    """Save conversation message to persistent storage"""
+    message_id = str(uuid.uuid4())
+    
+    with get_db_connection() as conn:
+        conn.execute('''
+            INSERT INTO conversations (id, user_id, message_type, content, agent_type)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (message_id, user_id, message_type, content, agent_type))
+        conn.commit()
+    
+    return message_id
+
+def get_user_conversation_history(user_id, limit=50):
+    """Retrieve user's conversation history"""
+    with get_db_connection() as conn:
+        messages = conn.execute('''
+            SELECT * FROM conversations 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        ''', (user_id, limit)).fetchall()
+    
+    return [dict(msg) for msg in reversed(messages)]
+
+def clear_user_conversation(user_id):
+    """Clear user's conversation history"""
+    with get_db_connection() as conn:
+        conn.execute('DELETE FROM conversations WHERE user_id = ?', (user_id,))
+        conn.commit()
+
+# ================================
+# SIMPLE PDF PROCESSING (NO COMPRESSION)
+# ================================
+
+def extract_text_from_pdf_simple(file_path, max_size_mb=200):
+    """Simple PDF extraction without compression - FIXED VERSION"""
+    try:
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+        print(f"Processing PDF: {file_path} ({file_size:.1f}MB)")
+        
+        if file_size > max_size_mb:
+            return f"PDF too large ({file_size:.1f}MB). Maximum size: {max_size_mb}MB"
+        
+        text_content = ""
+        page_count = 0
+        
+        # Force garbage collection before starting
+        gc.collect()
+        
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                total_pages = len(pdf.pages)
+                print(f"PDF has {total_pages} pages")
+                
+                # Process all pages up to reasonable limit
+                max_pages = min(total_pages, 1000)  # Max 1000 pages
+                if total_pages > max_pages:
+                    print(f"⚠️ Large PDF detected - processing first {max_pages} pages only")
+                
+                for page_num in range(max_pages):
+                    try:
+                        page = pdf.pages[page_num]
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content += f"\n--- Page {page_num + 1} ---\n"
+                            text_content += page_text.strip() + "\n"
+                            page_count += 1
+                        
+                        # Memory management every 50 pages
+                        if page_num % 50 == 0:
+                            gc.collect()
+                            
+                        # Progress indication
+                        if page_num % 100 == 0 and page_num > 0:
+                            print(f"Processed {page_num}/{max_pages} pages...")
+                            
+                        # Text size safety check (50MB text limit)
+                        if len(text_content) > 50 * 1024 * 1024:
+                            print("⚠️ Text content limit reached - stopping extraction")
+                            break
+                            
+                    except Exception as e:
+                        print(f"Error extracting page {page_num + 1}: {e}")
+                        continue
+                        
+        except Exception as pdf_error:
+            print(f"PDF processing error: {pdf_error}")
+            return f"Error processing PDF: {str(pdf_error)}"
+        
+        if not text_content.strip():
+            return f"No text could be extracted from {os.path.basename(file_path)}"
+        
+        print(f"✅ Successfully extracted {len(text_content)} characters from {page_count} pages")
+        return text_content
+        
+    except Exception as e:
+        error_msg = f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
+        print(f"❌ {error_msg}")
+        return error_msg
+    finally:
+        # ALWAYS force garbage collection
+        gc.collect()
+
+def extract_authors_from_text(text, filename):
+    """Extract author names from PDF text and filename"""
+    authors = set()
+    
+    # Common author extraction patterns
+    author_patterns = [
+        r"by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\d{4}\)",
+        r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[-–—]\s*",
+        r"Author[s]?:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+    ]
+    
+    # Extract from filename
+    filename_match = re.match(r"([A-Za-z\s]+)\s*[-–—]\s*", filename)
+    if filename_match:
+        potential_author = filename_match.group(1).strip()
+        if len(potential_author.split()) >= 2:
+            authors.add(potential_author.title())
+    
+    # Extract from text content (first 3000 chars for efficiency)
+    search_text = text[:3000] if len(text) > 3000 else text
+    for pattern in author_patterns:
+        matches = re.findall(pattern, search_text)
+        for match in matches:
+            if len(match.split()) >= 2:
+                authors.add(match.strip())
+    
+    return list(authors)
+
+# ================================
+# KNOWLEDGE BASE SYSTEM (SIMPLIFIED)
+# ================================
+
+def load_knowledge_base():
+    """Load admin knowledge base with fallback"""
+    try:
+        if os.path.exists(KNOWLEDGE_BASE_FILE):
+            with open(KNOWLEDGE_BASE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading knowledge base: {e}")
+    
+    return {
+        "documents": [],
+        "authorized_authors": [],
+        "last_updated": None,
+        "total_documents": 0,
+        "total_characters": 0
+    }
+
+def save_knowledge_base(knowledge_base):
+    """Save admin knowledge base with metadata"""
+    try:
+        knowledge_base["last_updated"] = datetime.now().isoformat()
+        knowledge_base["total_documents"] = len(knowledge_base["documents"])
+        
+        # Calculate total characters from all documents
+        total_chars = 0
+        for doc in knowledge_base["documents"]:
+            total_chars += len(doc.get("content", ""))
+        
+        knowledge_base["total_characters"] = total_chars
+        
+        with open(KNOWLEDGE_BASE_FILE, "w", encoding="utf-8") as f:
+            json.dump(knowledge_base, f, indent=2, ensure_ascii=False)
+            
+        print(f"✅ Knowledge base saved: {knowledge_base['total_documents']} documents")
+    except Exception as e:
+        print(f"❌ Error saving knowledge base: {e}")
+
+def add_document_to_knowledge_base(file_path, filename, is_core=True):
+    """Add document to admin knowledge base - SIMPLE VERSION"""
+    try:
+        # Extract text WITHOUT compression
+        text_content = extract_text_from_pdf_simple(file_path)
+        
+        if "Error" in text_content or "too large" in text_content:
+            return {"error": text_content}
+        
+        # Extract authors
+        extracted_authors = extract_authors_from_text(text_content, filename)
+        
+        # Create document info
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+        doc_id = str(uuid.uuid4())
+        
+        doc_info = {
+            "id": doc_id,
+            "filename": filename,
+            "content": text_content,  # Store text directly, no compression
+            "added_date": datetime.now().isoformat(),
+            "file_hash": file_hash,
+            "is_core": is_core,
+            "character_count": len(text_content),
+            "type": "admin_therapeutic_resource",
+            "extracted_authors": extracted_authors,
+            "pdf_extraction_status": "success"
+        }
+        
+        # Add to knowledge base
+        knowledge_base = load_knowledge_base()
+        knowledge_base["documents"].append(doc_info)
+        
+        # Update authorized authors
+        if "authorized_authors" not in knowledge_base:
+            knowledge_base["authorized_authors"] = []
+        
+        for author in extracted_authors:
+            if author not in knowledge_base["authorized_authors"]:
+                knowledge_base["authorized_authors"].append(author)
+                print(f"✅ Added authorized author: {author}")
+        
+        save_knowledge_base(knowledge_base)
+        
+        # Track in database
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO knowledge_base_docs 
+                (id, filename, file_hash, character_count, extracted_authors)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
+            conn.commit()
+        
+        print(f"✅ Added {filename} to knowledge base ({len(text_content)} characters)")
+        return doc_info
+        
+    except Exception as e:
+        error_msg = f"Error adding document: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+    finally:
+        gc.collect()
+
+# ================================
+# USER DOCUMENT PERSISTENCE (SIMPLIFIED)
+# ================================
+
+def add_personal_document_simple(file_path, filename, user_id):
+    """Add document to user's persistent personal collection - SIMPLE VERSION"""
+    try:
+        text_content = extract_text_from_pdf_simple(file_path, max_size_mb=100)
+        
+        if "Error" in text_content or "too large" in text_content:
+            return {"error": text_content}
+        
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
+        doc_id = str(uuid.uuid4())
+        
+        # Save to database
+        with get_db_connection() as conn:
+            conn.execute('''
+                INSERT INTO user_documents 
+                (id, user_id, filename, content, file_hash, character_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (doc_id, user_id, filename, text_content, file_hash, len(text_content)))
+            conn.commit()
+        
+        doc_info = {
+            "id": doc_id,
+            "filename": filename,
+            "content": text_content,
+            "file_hash": file_hash,
+            "character_count": len(text_content),
+            "upload_date": datetime.now().isoformat(),
+            "type": "user_personal_document"
+        }
+        
+        print(f"✅ Added {filename} to user {user_id} ({len(text_content)} characters)")
+        return doc_info
+        
+    except Exception as e:
+        error_msg = f"Error adding personal document: {str(e)}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+    finally:
+        gc.collect()
+
+def get_user_documents(user_id):
+    """Get user's persistent personal documents"""
+    with get_db_connection() as conn:
+        docs = conn.execute('''
+            SELECT * FROM user_documents 
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY upload_date DESC
+        ''', (user_id,)).fetchall()
+    
+    return [dict(doc) for doc in docs]
+
+def clear_user_documents(user_id):
+    """Clear user's personal documents"""
+    with get_db_connection() as conn:
+        result = conn.execute(
+            'UPDATE user_documents SET is_active = 0 WHERE user_id = ?', (user_id,)
+        )
+        conn.commit()
+        return result.rowcount
+
+# ================================
+# INTELLIGENT CONTEXT BUILDING (SIMPLIFIED)
+# ================================
+
+def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
+    """Build intelligent context from knowledge base + user history + personal docs"""
+    context = ""
+    
+    # 1. Get user's conversation history for continuity
+    conversation_history = get_user_conversation_history(user_id, limit=10)
+    if conversation_history:
+        context += "\n=== CONVERSATION CONTINUITY ===\n"
+        context += "Previous conversation context (for therapeutic continuity):\n"
+        for msg in conversation_history[-5:]:  # Last 5 messages
+            role = "User" if msg['message_type'] == 'user' else "Therapist"
+            context += f"{role}: {msg['content'][:200]}...\n"
+    
+    # 2. Search knowledge base for relevant content
+    knowledge_base = load_knowledge_base()
+    relevant_docs = []
+    
+    if knowledge_base["documents"]:
+        query_words = user_query.lower().split()
+        
+        for doc in knowledge_base["documents"]:
+            relevance_score = 0
+            
+            # Use uncompressed content directly
+            doc_text = doc.get("content", "").lower()
+            
+            for word in query_words:
+                if len(word) > 3:
+                    relevance_score += doc_text.count(word)
+                    
+            if relevance_score > 0:
+                relevant_docs.append((doc, relevance_score))
+        
+        # Sort by relevance and take top docs
+        relevant_docs.sort(key=lambda x: x[1], reverse=True)
+        relevant_docs = relevant_docs[:limit_kb_docs]
+    
+    # Add knowledge base content
+    if relevant_docs:
+        context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
+        for doc, score in relevant_docs:
+            content_snippet = doc.get("content", "")[:25000]  # Use first 25k chars
+            context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
+            
+            # Track access in database
+            with get_db_connection() as conn:
+                conn.execute('''
+                    UPDATE knowledge_base_docs 
+                    SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
+                    WHERE id = ?
+                ''', (doc.get('id', ''),))
+                conn.commit()
+    
+    # 3. Add user's personal documents
+    user_docs = get_user_documents(user_id)
+    if user_docs:
+        context += "\n=== USER'S PERSONAL CONTEXT ===\n"
+        for doc in user_docs[:3]:  # Limit to recent docs
+            context += f"From your document '{doc['filename']}':\n{doc['content'][:1000]}...\n\n"
+    
+    # 4. Add authorized authors
+    if knowledge_base.get("authorized_authors"):
+        context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
+        context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
+    
+    return context[:75000]  # Limit total context size
+
+# ================================
+# API FUNCTIONS
+# ================================
+
+def call_claude_direct(system_prompt, user_message):
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": claude_api_key,
+            "anthropic-version": "2023-06-01"
+        }
+        
+        data = {
+            "model": "claude-3-haiku-20240307",
+            "max_tokens": 1024,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_message}]
+        }
+        
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result["content"][0]["text"]
+        else:
+            print(f"Claude API error: {response.status_code}")
+            return f"Error calling Claude API: {response.status_code}"
+            
+    except Exception as e:
+        print(f"Error in Claude call: {e}")
+        return f"Error: {str(e)}"
+
+def call_openai_direct(system_prompt, user_message):
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {openai_api_key}"
+        }
+        
+        data = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            "max_tokens": 1024
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        else:
+            print(f"OpenAI API error: {response.status_code}")
+            return f"Error calling OpenAI API: {response.status_code}"
+            
+    except Exception as e:
+        print(f"Error in OpenAI call: {e}")
+        return f"Error: {str(e)}"
+
+def call_model_with_context(model, system, prompt, user_id):
+    """Enhanced model calling with persistent context"""
+    try:
+        # Build intelligent context
+        context = build_therapeutic_context(user_id, prompt)
+        
+        if context:
+            system += f"\n\nTHERAPEUTIC CONTEXT SYSTEM:\n"
+            system += f"You have access to this user's therapeutic history and curated knowledge. "
+            system += f"Provide continuity and reference previous conversations when appropriate.\n\n"
+            system += context
+        
+        # Call appropriate model
+        if "gpt" in model:
+            if not openai_api_key:
+                return "Error: OpenAI API key not configured"
+            return call_openai_direct(system, prompt)
+        else:
+            if not claude_api_key:
+                return "Error: Claude API key not configured"
+            return call_claude_direct(system, prompt)
+            
+    except Exception as e:
+        print(f"Error calling model: {e}")
+        return f"Error: {str(e)}"
+
+# ================================
+# ADMIN FUNCTIONS
+# ================================
+
+def is_admin_user():
+    return session.get("is_admin", False)
+
+# ================================
+# AUTHENTICATION ROUTES
+# ================================
+
+@app.route("/welcome", methods=["GET"])
+def welcome():
+    """Public landing page for new visitors"""
+    return render_template("welcome.html")
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """User registration"""
+    if request.method == "POST":
+        try:
+            data = request.get_json() if request.is_json else request.form
+            
+            email
