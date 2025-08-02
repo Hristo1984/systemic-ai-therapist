@@ -1589,7 +1589,7 @@ def upload():
             # Choose processing method based on size (Standard tier thresholds)
             if use_streaming or file_size_mb > 50:  # 50MB threshold for Standard tier
                 print("🔍 Using compressed processing method")
-                doc_info = add_document_compressed(file_path, file.filename, is_core=True)
+                doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
             else:
                 print("🔍 Using legacy processing method")
                 doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
