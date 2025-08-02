@@ -1072,7 +1072,7 @@ for word in query_words:
                 if len(word) > 3:
                     relevance_score += doc_text.count(word)
             
-            if relevance_score > 0:
+if relevance_score > 0:
                 relevant_docs.append((doc, relevance_score))
         
         # Sort by relevance and take top docs
