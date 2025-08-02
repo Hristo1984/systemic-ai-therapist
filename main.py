@@ -1084,7 +1084,7 @@ doc_text = doc.get("content", "").lower()
         context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
         for doc, score in relevant_docs:
             # Use compressed content retrieval
-            content_snippet = retrieve_compressed_content(doc, max_chars=20000)
+            content = doc.get("content", "")[:25000]
             context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
             
             # Track access in database
