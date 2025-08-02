@@ -1065,13 +1065,8 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
         for doc in knowledge_base["documents"]:
             relevance_score = 0
             
-            # Search in compressed content efficiently
-            if doc.get('content_type') in ['streaming_ultra_compressed', 'ultra_compressed']:
-                # Search in filename and authors for compressed docs
-                doc_text = (doc.get('filename', '') + ' ' + ' '.join(doc.get('extracted_authors', []))).lower()
-            else:
-                # Legacy uncompressed docs
-                doc_text = doc.get("content", "").lower()
+            # USE UNCOMPRESSED CONTENT (compression disabled)
+doc_text = doc.get("content", "").lower()
             
             for word in query_words:
                 if len(word) > 3:
