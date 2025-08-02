@@ -1068,12 +1068,12 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
             # USE UNCOMPRESSED CONTENT (compression disabled)
     doc_text = doc.get("content", "").lower()
             
-        for word in query_words:
+    for word in query_words:
         if len(word) > 3:
-                relevance_score += doc_text.count(word)
+            relevance_score += doc_text.count(word)
             
-        if relevance_score > 0:
-            relevant_docs.append((doc, relevance_score))
+    if relevance_score > 0:
+        relevant_docs.append((doc, relevance_score))
         
         # Sort by relevance and take top docs
     relevant_docs.sort(key=lambda x: x[1], reverse=True)
