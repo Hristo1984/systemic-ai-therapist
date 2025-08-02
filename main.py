@@ -1594,7 +1594,7 @@ doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True
                     os.remove(file_path)
                 except:
                     pass
-                return jsonify({"message": doc_info["error"], "success": False})
+                    return jsonify({"message": doc_info["error"], "success": False})
             
             # Clean up uploaded file
             try:
