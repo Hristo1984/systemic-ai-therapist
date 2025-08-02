@@ -927,7 +927,7 @@ def add_document_compressed(file_path, filename, is_core=True):
     finally:
         gc.collect()
 
-def retrieve_compressed_content(doc_info: Dict, max_chars: int = 5000) -> str:
+def retrieve_compressed_content(doc_info: Dict, max_chars: int = 25000) -> str:
     """
     Retrieve content from compressed documents
     Only decompresses what's needed for performance
@@ -1042,7 +1042,7 @@ def clear_user_documents(user_id):
 # INTELLIGENT CONTEXT BUILDING
 # ================================
 
-def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
+def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
     """Build intelligent context from knowledge base + user history + personal docs"""
     context = ""
     
@@ -1089,7 +1089,7 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
         context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
         for doc, score in relevant_docs:
             # Use compressed content retrieval
-            content_snippet = retrieve_compressed_content(doc, max_chars=2000)
+            content_snippet = retrieve_compressed_content(doc, max_chars=20000)
             context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
             
             # Track access in database
@@ -1113,7 +1113,7 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=3):
         context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
         context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
     
-    return context[:15000]  # Limit total context size
+    return context[:75000]  # Limit total context size
 
 # ================================
 # API FUNCTIONS
