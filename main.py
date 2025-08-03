@@ -695,7 +695,7 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
     if relevant_docs:
         context += "\n=== CURATED THERAPEUTIC KNOWLEDGE ===\n"
         for doc, score in relevant_docs:
-            content_snippet = doc.get("content", "")[:25000]  # Use first 25k chars
+            content_snippet = doc.get("content", "")[:500000]  # Use first 25k chars
             context += f"From '{doc['filename']}':\n{content_snippet}...\n\n"
             
             # Track access in database
@@ -719,7 +719,7 @@ def build_therapeutic_context(user_id, user_query, limit_kb_docs=6):
         context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
         context += f"You may reference: {', '.join(knowledge_base['authorized_authors'][:10])}\n"
     
-    return context[:75000]  # Limit total context size
+    return context[:600000]  # Limit total context size
 
 # ================================
 # API FUNCTIONS
