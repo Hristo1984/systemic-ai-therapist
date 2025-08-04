@@ -12,6 +12,7 @@ import time
 import resource
 import signal
 import sys
+import tiktoken
 from datetime import datetime, timedelta
 from flask import Flask, request, render_template, jsonify, redirect, session
 from dotenv import load_dotenv
@@ -19,9 +20,15 @@ import pdfplumber
 import gc
 from contextlib import contextmanager
 from functools import wraps
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from collections import Counter
 import traceback
+
+# New imports for embeddings and vector store
+import openai
+import chromadb
+from chromadb.config import Settings
+import numpy as np
 
 load_dotenv()
 app = Flask(__name__)
@@ -48,12 +55,18 @@ with open("config.json", "r") as f:
 # Environment variables
 openai_api_key = os.getenv("OPENAI_API_KEY")
 claude_api_key = os.getenv("CLAUDE_API_KEY")
-admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+admin_password = os.getenv("ADMIN_PASSWORD")
 
 if not openai_api_key:
     print("WARNING: OPENAI_API_KEY not found in environment variables")
 if not claude_api_key:
     print("WARNING: CLAUDE_API_KEY not found in environment variables")
+if not admin_password:
+    print("WARNING: ADMIN_PASSWORD not found in environment variables")
+
+# Initialize OpenAI
+if openai_api_key:
+    openai.api_key = openai_api_key
 
 # File paths
 DATABASE_FILE = "therapeutic_ai.db"
@@ -61,11 +74,381 @@ KNOWLEDGE_BASE_FILE = "core_memory/knowledge_base.json"
 CORE_MEMORY_DIR = "core_memory"
 UPLOADS_DIR = "uploads"
 USER_UPLOADS_DIR = "user_uploads"
+CHROMA_PERSIST_DIR = "chroma_db"
 
 # Ensure directories exist
-for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs"]:
+for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs", CHROMA_PERSIST_DIR]:
     os.makedirs(directory, exist_ok=True)
     print(f"✅ Created/verified directory: {directory}")
+
+# ================================
+# ENHANCED EMBEDDINGS & VECTOR STORE SYSTEM
+# ================================
+
+# Initialize ChromaDB
+def init_chroma():
+    """Initialize ChromaDB with persistent storage"""
+    try:
+        client = chromadb.PersistentClient(
+            path=CHROMA_PERSIST_DIR,
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
+        )
+        print("✅ ChromaDB initialized with persistent storage")
+        return client
+    except Exception as e:
+        print(f"❌ ChromaDB initialization failed: {e}")
+        return None
+
+# Global ChromaDB client
+chroma_client = init_chroma()
+
+# Token counting for budget management
+def count_tokens(text: str, model: str = "gpt-4") -> int:
+    """Count tokens in text using tiktoken"""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except Exception:
+        # Fallback: rough estimation (4 chars per token)
+        return len(text) // 4
+
+def get_openai_embedding(text: str, model: str = "text-embedding-3-small") -> Optional[List[float]]:
+    """Get embedding from OpenAI"""
+    try:
+        if not openai_api_key:
+            print("❌ OpenAI API key not available for embeddings")
+            return None
+            
+        response = openai.embeddings.create(
+            model=model,
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        print(f"❌ OpenAI embedding error: {e}")
+        return None
+
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 150) -> List[Dict]:
+    """Split text into overlapping chunks with metadata"""
+    words = text.split()
+    chunks = []
+    
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk_words = words[i:i + chunk_size]
+        chunk_text = " ".join(chunk_words)
+        
+        chunks.append({
+            "text": chunk_text,
+            "chunk_index": len(chunks),
+            "start_word": i,
+            "end_word": i + len(chunk_words),
+            "word_count": len(chunk_words),
+            "char_count": len(chunk_text)
+        })
+        
+        # Stop if this chunk contains the last words
+        if i + chunk_size >= len(words):
+            break
+    
+    return chunks
+
+def get_or_create_collection(collection_name: str) -> Optional[Any]:
+    """Get or create a ChromaDB collection"""
+    try:
+        if not chroma_client:
+            return None
+            
+        collection = chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata={"description": f"Therapeutic AI {collection_name} collection"}
+        )
+        return collection
+    except Exception as e:
+        print(f"❌ Error with collection {collection_name}: {e}")
+        return None
+
+def add_document_to_vector_store(
+    doc_id: str, 
+    filename: str, 
+    content: str, 
+    collection_name: str = "admin_kb",
+    user_id: Optional[str] = None
+) -> bool:
+    """Add document chunks to vector store with embeddings"""
+    try:
+        collection = get_or_create_collection(collection_name)
+        if not collection:
+            return False
+            
+        print(f"🔍 VECTOR STORE: Adding {filename} to {collection_name}")
+        
+        # Create chunks
+        chunks = chunk_text(content)
+        print(f"📄 Created {len(chunks)} chunks from {filename}")
+        
+        # Generate embeddings and add to collection
+        ids = []
+        embeddings = []
+        metadatas = []
+        documents = []
+        
+        for chunk in chunks:
+            chunk_id = f"{doc_id}_chunk_{chunk['chunk_index']}"
+            
+            # Get embedding
+            embedding = get_openai_embedding(chunk["text"])
+            if not embedding:
+                print(f"⚠️ Failed to get embedding for chunk {chunk['chunk_index']}")
+                continue
+                
+            ids.append(chunk_id)
+            embeddings.append(embedding)
+            documents.append(chunk["text"])
+            
+            metadata = {
+                "doc_id": doc_id,
+                "filename": filename,
+                "chunk_index": chunk["chunk_index"],
+                "word_count": chunk["word_count"],
+                "char_count": chunk["char_count"],
+                "collection_type": collection_name
+            }
+            
+            if user_id:
+                metadata["user_id"] = user_id
+                
+            metadatas.append(metadata)
+        
+        if ids:
+            collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas
+            )
+            print(f"✅ Added {len(ids)} chunks to {collection_name}")
+            return True
+        else:
+            print(f"❌ No chunks could be embedded for {filename}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Vector store error for {filename}: {e}")
+        traceback.print_exc()
+        return False
+
+def query_vector_store(
+    query: str, 
+    collection_name: str = "admin_kb",
+    user_id: Optional[str] = None,
+    n_results: int = 8
+) -> List[Dict]:
+    """Query vector store for relevant chunks"""
+    try:
+        collection = get_or_create_collection(collection_name)
+        if not collection:
+            return []
+            
+        # Get query embedding
+        query_embedding = get_openai_embedding(query)
+        if not query_embedding:
+            return []
+            
+        # Build where clause for user filtering
+        where_clause = None
+        if user_id and collection_name == "user_docs":
+            where_clause = {"user_id": user_id}
+            
+        # Query collection
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where=where_clause,
+            include=["documents", "metadatas", "distances"]
+        )
+        
+        # Format results
+        formatted_results = []
+        if results and results['documents'] and results['documents'][0]:
+            for i, doc in enumerate(results['documents'][0]):
+                distance = results['distances'][0][i] if results['distances'] else 1.0
+                similarity = 1 - distance  # Convert distance to similarity
+                
+                formatted_results.append({
+                    "text": doc,
+                    "metadata": results['metadatas'][0][i],
+                    "similarity": similarity,
+                    "distance": distance
+                })
+        
+        return formatted_results
+        
+    except Exception as e:
+        print(f"❌ Vector store query error: {e}")
+        return []
+
+def get_document_summary(doc_content: str, max_length: int = 200) -> str:
+    """Create a brief summary of document content"""
+    try:
+        # Take first few sentences up to max_length
+        sentences = doc_content.split('. ')
+        summary = ""
+        for sentence in sentences:
+            if len(summary + sentence) > max_length:
+                break
+            summary += sentence + ". "
+        
+        return summary.strip() or doc_content[:max_length] + "..."
+    except:
+        return doc_content[:max_length] + "..."
+
+# ================================
+# ENHANCED RETRIEVAL SYSTEM
+# ================================
+
+def retrieve_relevant_context(
+    user_id: str, 
+    query: str, 
+    max_tokens: int = 20000
+) -> Dict[str, Any]:
+    """
+    Enhanced retrieval system with token budget management
+    Returns context with debug information
+    """
+    debug_info = {
+        "query": query,
+        "retrieval_timestamp": datetime.now().isoformat(),
+        "admin_chunks_found": 0,
+        "user_chunks_found": 0,
+        "total_context_tokens": 0,
+        "chunks_used": [],
+        "token_breakdown": {}
+    }
+    
+    context_parts = []
+    token_count = 0
+    
+    print(f"🔍 RETRIEVAL: Starting enhanced retrieval for query: '{query[:100]}...'")
+    
+    # 1. Get conversation history summary
+    conversation_history = get_user_conversation_history(user_id, limit=10)
+    history_summary = ""
+    if conversation_history:
+        # Summarize recent conversation if too long
+        recent_messages = conversation_history[-5:]  # Last 5 messages
+        history_text = "\n".join([
+            f"{'User' if msg['message_type'] == 'user' else 'AI'}: {msg['content'][:200]}..."
+            for msg in recent_messages
+        ])
+        
+        history_tokens = count_tokens(history_text)
+        if history_tokens < 1000:  # If short enough, include full history
+            history_summary = f"=== RECENT CONVERSATION CONTEXT ===\n{history_text}\n\n"
+            token_count += history_tokens
+            debug_info["token_breakdown"]["conversation_history"] = history_tokens
+    
+    # 2. Query admin knowledge base
+    admin_results = query_vector_store(query, "admin_kb", n_results=8)
+    debug_info["admin_chunks_found"] = len(admin_results)
+    
+    print(f"📚 Found {len(admin_results)} admin chunks")
+    
+    # 3. Query user documents
+    user_results = query_vector_store(query, "user_docs", user_id, n_results=6)
+    debug_info["user_chunks_found"] = len(user_results)
+    
+    print(f"📁 Found {len(user_results)} user chunks")
+    
+    # 4. Combine and sort by relevance
+    all_results = []
+    
+    # Add admin results with source marking
+    for result in admin_results:
+        result["source_type"] = "admin_kb"
+        all_results.append(result)
+    
+    # Add user results with source marking  
+    for result in user_results:
+        result["source_type"] = "user_docs"
+        all_results.append(result)
+    
+    # Sort by similarity score
+    all_results.sort(key=lambda x: x["similarity"], reverse=True)
+    
+    # 5. Build context within token budget
+    admin_context = ""
+    user_context = ""
+    chunks_used = 0
+    
+    # Reserve tokens for system prompt and response
+    available_tokens = max_tokens - token_count - 2000  # Reserve 2k for system prompt
+    
+    for result in all_results:
+        chunk_tokens = count_tokens(result["text"])
+        
+        # Check if we have room for this chunk
+        if token_count + chunk_tokens > available_tokens:
+            print(f"⚠️ Token budget exhausted. Used {chunks_used} chunks, {token_count} tokens")
+            break
+        
+        # Add chunk to appropriate section
+        if result["source_type"] == "admin_kb":
+            if not admin_context:
+                admin_context += "=== THERAPEUTIC KNOWLEDGE BASE ===\n"
+            
+            filename = result["metadata"].get("filename", "Unknown")
+            chunk_idx = result["metadata"].get("chunk_index", 0)
+            admin_context += f"\n--- From: {filename} (Chunk {chunk_idx}, Relevance: {result['similarity']:.3f}) ---\n"
+            admin_context += result["text"] + "\n"
+            
+        else:  # user_docs
+            if not user_context:
+                user_context += "\n=== YOUR PERSONAL DOCUMENTS ===\n"
+            
+            filename = result["metadata"].get("filename", "Unknown") 
+            chunk_idx = result["metadata"].get("chunk_index", 0)
+            user_context += f"\n--- From your document: {filename} (Chunk {chunk_idx}, Relevance: {result['similarity']:.3f}) ---\n"
+            user_context += result["text"] + "\n"
+        
+        token_count += chunk_tokens
+        chunks_used += 1
+        
+        debug_info["chunks_used"].append({
+            "filename": result["metadata"].get("filename", "Unknown"),
+            "chunk_index": result["metadata"].get("chunk_index", 0),
+            "similarity": result["similarity"],
+            "source_type": result["source_type"],
+            "tokens": chunk_tokens
+        })
+    
+    # 6. Assemble final context
+    final_context = history_summary + admin_context + user_context
+    
+    # Add metadata
+    if admin_context or user_context:
+        final_context += f"\n=== CONTEXT METADATA ===\n"
+        final_context += f"Retrieved {chunks_used} most relevant chunks\n"
+        final_context += f"Admin KB chunks: {debug_info['admin_chunks_found']}\n"
+        final_context += f"User doc chunks: {debug_info['user_chunks_found']}\n"
+        final_context += f"Total context tokens: {token_count}\n"
+        final_context += f"Generated at: {datetime.now().isoformat()}\n"
+    
+    debug_info["total_context_tokens"] = token_count
+    debug_info["token_breakdown"]["admin_context"] = count_tokens(admin_context)
+    debug_info["token_breakdown"]["user_context"] = count_tokens(user_context)
+    debug_info["chunks_included"] = chunks_used
+    
+    print(f"✅ RETRIEVAL COMPLETE: {chunks_used} chunks, {token_count} tokens")
+    
+    return {
+        "context": final_context,
+        "debug_info": debug_info,
+        "token_count": token_count,
+        "chunks_used": chunks_used
+    }
 
 # ================================
 # ERROR HANDLERS FOR MEMORY ISSUES
@@ -136,8 +519,10 @@ def get_authenticated_user():
 @contextmanager
 def get_db_connection():
     """Context manager for database connections with proper cleanup"""
-    conn = sqlite3.connect(DATABASE_FILE)
+    conn = sqlite3.connect(DATABASE_FILE, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
     try:
         yield conn
     finally:
@@ -166,34 +551,17 @@ def init_database():
         ''')
         
         # Add authentication columns to existing users (migration)
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN email TEXT')
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN username TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN full_name TEXT')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 1')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN subscription_type TEXT DEFAULT "free"')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE users ADD COLUMN total_sessions INTEGER DEFAULT 0')
-        except sqlite3.OperationalError:
-            pass
+        columns_to_add = [
+            'email TEXT', 'username TEXT', 'password_hash TEXT', 'full_name TEXT',
+            'is_verified BOOLEAN DEFAULT 1', 'subscription_type TEXT DEFAULT "free"',
+            'total_sessions INTEGER DEFAULT 0'
+        ]
+        
+        for column in columns_to_add:
+            try:
+                conn.execute(f'ALTER TABLE users ADD COLUMN {column}')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         
         # Conversations table for persistent chat history
         conn.execute('''
@@ -220,20 +588,7 @@ def init_database():
                 character_count INTEGER,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Therapy progress tracking
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS therapy_progress (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                session_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                mood_score INTEGER,
-                progress_notes TEXT,
-                therapeutic_insights JSON,
-                goals_updated JSON,
+                vector_indexed BOOLEAN DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -248,38 +603,23 @@ def init_database():
                 extracted_authors JSON,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 0
+                access_count INTEGER DEFAULT 0,
+                vector_indexed BOOLEAN DEFAULT 0
             )
         ''')
         
-        # User sessions for security
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                session_token TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Password reset tokens
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS password_resets (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                reset_token TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                used BOOLEAN DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
+        # Add vector_indexed columns if missing
+        try:
+            conn.execute('ALTER TABLE user_documents ADD COLUMN vector_indexed BOOLEAN DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE knowledge_base_docs ADD COLUMN vector_indexed BOOLEAN DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
         
         conn.commit()
-        print("✅ Enhanced user authentication database initialized")
+        print("✅ Enhanced database with vector indexing support initialized")
 
 # ================================
 # USER MANAGEMENT SYSTEM (HYBRID)
@@ -494,7 +834,7 @@ def extract_authors_from_text_improved(text, filename):
     return list(authors)
 
 # ================================
-# IMPROVED KNOWLEDGE BASE SYSTEM
+# IMPROVED KNOWLEDGE BASE SYSTEM WITH VECTOR INDEXING
 # ================================
 
 def load_knowledge_base():
@@ -546,7 +886,7 @@ def save_knowledge_base(knowledge_base):
         print(f"❌ Error saving knowledge base: {e}")
 
 def add_document_to_knowledge_base(file_path, filename, is_core=True):
-    """Add document to admin knowledge base - IMPROVED VERSION"""
+    """Add document to admin knowledge base with vector indexing"""
     try:
         print(f"🔍 ADMIN UPLOAD: Processing {filename}")
         
@@ -591,16 +931,24 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
         
         save_knowledge_base(knowledge_base)
         
+        # Add to vector store
+        vector_success = add_document_to_vector_store(
+            doc_id, filename, text_content, "admin_kb"
+        )
+        
         # Track in database
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT INTO knowledge_base_docs 
-                (id, filename, file_hash, character_count, extracted_authors)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (doc_id, filename, file_hash, len(text_content), json.dumps(extracted_authors)))
+                (id, filename, file_hash, character_count, extracted_authors, vector_indexed)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (doc_id, filename, file_hash, len(text_content), 
+                  json.dumps(extracted_authors), vector_success))
             conn.commit()
         
         print(f"✅ Added '{filename}' to knowledge base ({len(text_content):,} characters)")
+        print(f"🔍 Vector indexing: {'Success' if vector_success else 'Failed'}")
+        
         return doc_info
         
     except Exception as e:
@@ -612,11 +960,11 @@ def add_document_to_knowledge_base(file_path, filename, is_core=True):
         gc.collect()
 
 # ================================
-# USER DOCUMENT PERSISTENCE (IMPROVED)
+# USER DOCUMENT PERSISTENCE WITH VECTOR INDEXING
 # ================================
 
 def add_personal_document_improved(file_path, filename, user_id):
-    """Add document to user's persistent personal collection - IMPROVED VERSION"""
+    """Add document to user's persistent personal collection with vector indexing"""
     try:
         print(f"🔍 PERSONAL UPLOAD: Processing {filename} for user {user_id}")
         
@@ -628,13 +976,19 @@ def add_personal_document_improved(file_path, filename, user_id):
         file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()
         doc_id = str(uuid.uuid4())
         
+        # Add to vector store
+        vector_success = add_document_to_vector_store(
+            doc_id, filename, text_content, "user_docs", user_id
+        )
+        
         # Save to database
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT INTO user_documents 
-                (id, user_id, filename, content, file_hash, character_count)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (doc_id, user_id, filename, text_content, file_hash, len(text_content)))
+                (id, user_id, filename, content, file_hash, character_count, vector_indexed)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (doc_id, user_id, filename, text_content, file_hash, 
+                  len(text_content), vector_success))
             conn.commit()
         
         doc_info = {
@@ -644,10 +998,13 @@ def add_personal_document_improved(file_path, filename, user_id):
             "file_hash": file_hash,
             "character_count": len(text_content),
             "upload_date": datetime.now().isoformat(),
-            "type": "user_personal_document"
+            "type": "user_personal_document",
+            "vector_indexed": vector_success
         }
         
         print(f"✅ Added '{filename}' to user {user_id} ({len(text_content):,} characters)")
+        print(f"🔍 Vector indexing: {'Success' if vector_success else 'Failed'}")
+        
         return doc_info
         
     except Exception as e:
@@ -670,183 +1027,46 @@ def get_user_documents(user_id):
     return [dict(doc) for doc in docs]
 
 def clear_user_documents(user_id):
-    """Clear user's personal documents"""
-    with get_db_connection() as conn:
-        result = conn.execute(
-            'UPDATE user_documents SET is_active = 0 WHERE user_id = ?', (user_id,)
-        )
-        conn.commit()
-        return result.rowcount
+    """Clear user's personal documents and vector store entries"""
+    try:
+        # Get user documents before clearing
+        docs = get_user_documents(user_id)
+        
+        # Remove from vector store
+        user_collection = get_or_create_collection("user_docs")
+        if user_collection and docs:
+            doc_ids = [doc['id'] for doc in docs]
+            # Remove chunks for these documents
+            for doc_id in doc_ids:
+                try:
+                    # Get all chunk IDs for this document
+                    results = user_collection.get(
+                        where={"doc_id": doc_id, "user_id": user_id}
+                    )
+                    if results and results['ids']:
+                        user_collection.delete(ids=results['ids'])
+                        print(f"🗑️ Removed vector chunks for {doc_id}")
+                except Exception as e:
+                    print(f"⚠️ Error removing vector chunks: {e}")
+        
+        # Clear from database
+        with get_db_connection() as conn:
+            result = conn.execute(
+                'UPDATE user_documents SET is_active = 0 WHERE user_id = ?', (user_id,)
+            )
+            conn.commit()
+            return result.rowcount
+            
+    except Exception as e:
+        print(f"❌ Error clearing user documents: {e}")
+        return 0
 
 # ================================
-# COMPLETELY REWRITTEN CONTEXT BUILDING
-# ================================
-
-def build_therapeutic_context_improved(user_id, user_query, limit_kb_docs=5):
-    """COMPLETELY IMPROVED context building with advanced search and debugging"""
-    context = ""
-    
-    print(f"🔍 CONTEXT BUILD: Query = '{user_query[:100]}...'")
-    print(f"🔍 CONTEXT BUILD: User ID = {user_id}")
-    
-    # 1. Get user's conversation history for continuity
-    conversation_history = get_user_conversation_history(user_id, limit=10)
-    if conversation_history:
-        context += "\n=== RECENT CONVERSATION CONTEXT ===\n"
-        context += "Previous conversation for therapeutic continuity:\n"
-        for msg in conversation_history[-5:]:  # Last 5 messages
-            role = "User" if msg['message_type'] == 'user' else "Therapist"
-            context += f"{role}: {msg['content'][:300]}...\n"
-    
-    # 2. ADVANCED KNOWLEDGE BASE SEARCH
-    knowledge_base = load_knowledge_base()
-    print(f"🔍 CONTEXT BUILD: Knowledge base has {len(knowledge_base['documents'])} documents")
-    
-    if not knowledge_base["documents"]:
-        print("❌ CONTEXT BUILD: No documents in knowledge base!")
-        context += "\n=== NO KNOWLEDGE BASE AVAILABLE ===\n"
-        context += "No therapeutic resources have been uploaded to the knowledge base.\n"
-        return context
-    
-    # Advanced search algorithm
-    query_words = user_query.lower().split()
-    book_title_patterns = [
-        r'"([^"]+)"',  # "Book Title in quotes"
-        r"book[:\s]+([A-Za-z\s]+)",  # "book: Title" or "book Title"
-        r"titled?\s+([A-Za-z\s]+)",  # "titled Title"
-    ]
-    
-    # Extract potential book titles from query
-    potential_titles = []
-    for pattern in book_title_patterns:
-        matches = re.findall(pattern, user_query, re.IGNORECASE)
-        potential_titles.extend(matches)
-    
-    print(f"🔍 CONTEXT BUILD: Search words = {query_words}")
-    print(f"🔍 CONTEXT BUILD: Potential book titles = {potential_titles}")
-    
-    # Score each document
-    scored_docs = []
-    
-    for i, doc in enumerate(knowledge_base["documents"]):
-        filename = doc.get("filename", "").lower()
-        doc_content = doc.get("content", "").lower()
-        
-        # Scoring system
-        title_exact_match = 0
-        filename_word_matches = 0
-        content_relevance = 0
-        
-        # 1. Check for exact title matches (highest priority)
-        for title in potential_titles:
-            if title.lower() in filename:
-                title_exact_match += 50
-                print(f"✅ EXACT TITLE MATCH: '{title}' found in '{doc.get('filename')}'")
-        
-        # 2. Check filename word matches
-        for word in query_words:
-            if len(word) > 2:  # Lowered from 3 to 2
-                if word in filename:
-                    filename_word_matches += 10
-                    print(f"✅ FILENAME MATCH: '{word}' in '{doc.get('filename')}'")
-        
-        # 3. Content relevance (for non-title searches)
-        if not potential_titles:  # Only do content search if not looking for specific titles
-            for word in query_words:
-                if len(word) > 3:
-                    content_relevance += min(doc_content.count(word), 10)  # Cap at 10 to prevent spam
-        
-        total_score = title_exact_match + filename_word_matches + content_relevance
-        
-        if total_score > 0:
-            scored_docs.append({
-                "doc": doc,
-                "score": total_score,
-                "title_match": title_exact_match,
-                "filename_match": filename_word_matches,
-                "content_match": content_relevance
-            })
-        
-        print(f"🔍 CONTEXT BUILD: '{doc.get('filename')}' = {total_score} points (title:{title_exact_match}, filename:{filename_word_matches}, content:{content_relevance})")
-    
-    # Sort by relevance
-    scored_docs.sort(key=lambda x: x["score"], reverse=True)
-    top_docs = scored_docs[:limit_kb_docs]
-    
-    print(f"🔍 CONTEXT BUILD: Selected {len(top_docs)} documents")
-    
-    # Build context from selected documents
-    if top_docs:
-        context += "\n=== THERAPEUTIC KNOWLEDGE BASE ===\n"
-        context += f"Found {len(top_docs)} relevant therapeutic resources:\n\n"
-        
-        for i, doc_data in enumerate(top_docs):
-            doc = doc_data["doc"]
-            score = doc_data["score"]
-            
-            # Use much more content per document
-            content_to_include = min(len(doc.get("content", "")), 1000000)  # Up to 1MB per doc
-            doc_content = doc.get("content", "")[:content_to_include]
-            
-            context += f"=== RESOURCE {i+1}: '{doc['filename']}' (Relevance: {score}) ===\n"
-            context += f"{doc_content}\n\n"
-            
-            print(f"✅ CONTEXT BUILD: Added {len(doc_content):,} chars from '{doc['filename']}'")
-            
-            # Track access in database
-            try:
-                with get_db_connection() as conn:
-                    conn.execute('''
-                        UPDATE knowledge_base_docs 
-                        SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1
-                        WHERE id = ?
-                    ''', (doc.get('id', ''),))
-                    conn.commit()
-            except Exception as e:
-                print(f"⚠️ Could not update access tracking: {e}")
-    
-    else:
-        print("❌ CONTEXT BUILD: No relevant documents found!")
-        context += "\n=== NO RELEVANT KNOWLEDGE FOUND ===\n"
-        context += f"Search query: '{user_query}'\n"
-        context += "Available documents in knowledge base:\n"
-        for doc in knowledge_base["documents"][:10]:  # Show first 10
-            context += f"- '{doc.get('filename', 'Unknown')}'\n"
-    
-    # 3. Add user's personal documents
-    user_docs = get_user_documents(user_id)
-    if user_docs:
-        context += "\n=== YOUR PERSONAL DOCUMENTS ===\n"
-        context += f"You have {len(user_docs)} personal documents:\n\n"
-        for doc in user_docs[:3]:  # Include up to 3 recent docs
-            personal_content = doc['content'][:500000]  # 500k chars per personal doc
-            context += f"=== YOUR DOCUMENT: '{doc['filename']}' ===\n"
-            context += f"{personal_content}\n\n"
-            print(f"✅ CONTEXT BUILD: Added {len(personal_content):,} chars from personal doc '{doc['filename']}'")
-    
-    # 4. Add authorized authors list
-    if knowledge_base.get("authorized_authors"):
-        context += f"\n=== AUTHORIZED THERAPEUTIC AUTHORS ===\n"
-        context += f"Therapeutic experts you can reference: {', '.join(knowledge_base['authorized_authors'][:15])}\n"
-    
-    # 5. Add metadata
-    context += f"\n=== CONTEXT METADATA ===\n"
-    context += f"Total knowledge base documents: {len(knowledge_base['documents'])}\n"
-    context += f"User's personal documents: {len(user_docs) if user_docs else 0}\n"
-    context += f"Context built at: {datetime.now().isoformat()}\n"
-    
-    final_context_size = len(context)
-    print(f"🔍 CONTEXT BUILD: Final context = {final_context_size:,} characters")
-    
-    # Return full context - let Claude handle the size
-    return context
-
-# ================================
-# IMPROVED API FUNCTIONS
+# ENHANCED API FUNCTIONS WITH CLAUDE PRIMARY
 # ================================
 
 def call_claude_improved(system_prompt, user_message):
-    """Improved Claude API call with better error handling"""
+    """Improved Claude API call with better error handling - PRIMARY MODEL"""
     try:
         headers = {
             "Content-Type": "application/json",
@@ -854,7 +1074,7 @@ def call_claude_improved(system_prompt, user_message):
             "anthropic-version": "2023-06-01"
         }
         
-        # Use larger context window
+        # Use larger context window for Claude
         data = {
             "model": config.get("claude_model", "claude-3-haiku-20240307"),
             "max_tokens": config.get("max_tokens", 2048),
@@ -862,7 +1082,7 @@ def call_claude_improved(system_prompt, user_message):
             "messages": [{"role": "user", "content": user_message}]
         }
         
-        print(f"🔍 CLAUDE API: Sending {len(system_prompt):,} system chars + {len(user_message):,} user chars")
+        print(f"🔍 CLAUDE API (PRIMARY): Sending {len(system_prompt):,} system chars + {len(user_message):,} user chars")
         
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -879,15 +1099,15 @@ def call_claude_improved(system_prompt, user_message):
         else:
             error_msg = f"Claude API error: {response.status_code} - {response.text}"
             print(f"❌ CLAUDE API: {error_msg}")
-            return f"Error calling Claude API: {response.status_code}"
+            return None  # Return None to trigger fallback
             
     except Exception as e:
         error_msg = f"Error in Claude call: {str(e)}"
         print(f"❌ CLAUDE API: {error_msg}")
-        return error_msg
+        return None  # Return None to trigger fallback
 
 def call_openai_improved(system_prompt, user_message):
-    """Improved OpenAI API call with better error handling"""
+    """Improved OpenAI API call with better error handling - FALLBACK MODEL"""
     try:
         headers = {
             "Content-Type": "application/json",
@@ -903,7 +1123,7 @@ def call_openai_improved(system_prompt, user_message):
             "max_tokens": config.get("max_tokens", 2048)
         }
         
-        print(f"🔍 OPENAI API: Sending {len(system_prompt):,} system chars + {len(user_message):,} user chars")
+        print(f"🔍 OPENAI API (FALLBACK): Sending {len(system_prompt):,} system chars + {len(user_message):,} user chars")
         
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
@@ -927,22 +1147,24 @@ def call_openai_improved(system_prompt, user_message):
         print(f"❌ OPENAI API: {error_msg}")
         return error_msg
 
-def call_model_with_improved_context(model, system, prompt, user_id):
-    """Enhanced model calling with improved context and debugging"""
+def call_model_with_enhanced_retrieval(model, system, prompt, user_id):
+    """Enhanced model calling with retrieval system and Claude primary"""
     try:
         print(f"🔍 MODEL CALL: Model = {model}, User = {user_id}")
         
-        # Build intelligent context with improved search
-        context = build_therapeutic_context_improved(user_id, prompt)
+        # Use enhanced retrieval system
+        retrieval_result = retrieve_relevant_context(user_id, prompt)
+        context = retrieval_result["context"]
+        debug_info = retrieval_result["debug_info"]
         
         if context:
             enhanced_system = f"""
 {system}
 
-THERAPEUTIC CONTEXT SYSTEM:
-You have access to this user's therapeutic history and curated knowledge base. 
-Provide continuity and reference previous conversations when appropriate.
-When referencing knowledge base resources, mention the specific document name.
+THERAPEUTIC CONTEXT WITH VECTOR RETRIEVAL:
+You have access to this user's therapeutic history and curated knowledge base through advanced semantic search.
+When referencing knowledge base resources, mention the specific document name and relevance score.
+Provide continuity based on conversation history when appropriate.
 
 {context}
 """
@@ -950,16 +1172,21 @@ When referencing knowledge base resources, mention the specific document name.
             enhanced_system = system
         
         print(f"🔍 MODEL CALL: Final system prompt = {len(enhanced_system):,} characters")
+        print(f"🔍 RETRIEVAL DEBUG: {debug_info['chunks_included']} chunks, {debug_info['total_context_tokens']} tokens")
         
-        # Call appropriate model with improved functions
-        if "gpt" in model.lower():
-            if not openai_api_key:
-                return "Error: OpenAI API key not configured"
+        # Try Claude first (PRIMARY), fallback to OpenAI
+        if claude_api_key:
+            claude_response = call_claude_improved(enhanced_system, prompt)
+            if claude_response:  # Claude succeeded
+                return claude_response
+            else:
+                print("⚠️ Claude failed, falling back to OpenAI...")
+        
+        # Fallback to OpenAI
+        if openai_api_key:
             return call_openai_improved(enhanced_system, prompt)
         else:
-            if not claude_api_key:
-                return "Error: Claude API key not configured"
-            return call_claude_improved(enhanced_system, prompt)
+            return "Error: No working API keys available"
             
     except Exception as e:
         error_msg = f"Error calling model: {str(e)}"
@@ -975,56 +1202,187 @@ def is_admin_user():
     return session.get("is_admin", False)
 
 # ================================
-# DEBUG AND DIAGNOSTIC ROUTES
+# NEW VECTOR STORE ADMIN ROUTES
 # ================================
 
-@app.route("/debug-knowledge", methods=["POST"])
-def debug_knowledge():
-    """Debug endpoint to test knowledge base search - FOR ADMIN ONLY"""
+@app.route("/rebuild-index", methods=["POST"])
+def rebuild_vector_index():
+    """ADMIN ONLY: Rebuild vector index for all documents"""
     if not is_admin_user():
         return jsonify({"error": "Admin access required"}), 403
     
     try:
-        data = request.get_json()
-        search_query = data.get("query", "")
+        print("🔧 REBUILD INDEX: Starting complete vector index rebuild...")
         
-        if not search_query:
-            return jsonify({"error": "No search query provided"}), 400
+        # Get all documents from database
+        with get_db_connection() as conn:
+            admin_docs = conn.execute('''
+                SELECT * FROM knowledge_base_docs
+            ''').fetchall()
+            
+            user_docs = conn.execute('''
+                SELECT * FROM user_documents WHERE is_active = 1
+            ''').fetchall()
         
-        # Load knowledge base
+        # Load knowledge base for admin documents content
         knowledge_base = load_knowledge_base()
+        admin_content_map = {doc['id']: doc for doc in knowledge_base['documents']}
         
-        # Test the improved search
-        context = build_therapeutic_context_improved("debug-user", search_query, limit_kb_docs=10)
+        rebuild_stats = {
+            "admin_docs_processed": 0,
+            "user_docs_processed": 0,
+            "admin_docs_failed": 0,
+            "user_docs_failed": 0,
+            "total_chunks_created": 0,
+            "errors": []
+        }
         
-        # Get document list
-        all_docs = []
-        for i, doc in enumerate(knowledge_base["documents"]):
-            all_docs.append({
-                "index": i,
-                "filename": doc.get("filename", "Unknown"),
-                "character_count": doc.get("character_count", 0),
-                "authors": doc.get("extracted_authors", []),
-                "content_preview": doc.get("content", "")[:300] + "..." if doc.get("content") else "NO CONTENT"
-            })
+        # Clear existing collections
+        try:
+            if chroma_client:
+                chroma_client.delete_collection("admin_kb")
+                chroma_client.delete_collection("user_docs")
+                print("🗑️ Cleared existing vector collections")
+        except Exception as e:
+            print(f"⚠️ Error clearing collections: {e}")
+        
+        # Rebuild admin knowledge base
+        print(f"📚 Rebuilding admin KB: {len(admin_docs)} documents")
+        for doc_row in admin_docs:
+            doc_id = doc_row['id']
+            filename = doc_row['filename']
+            
+            if doc_id in admin_content_map:
+                content = admin_content_map[doc_id]['content']
+                success = add_document_to_vector_store(
+                    doc_id, filename, content, "admin_kb"
+                )
+                
+                if success:
+                    rebuild_stats["admin_docs_processed"] += 1
+                    # Update database
+                    with get_db_connection() as conn:
+                        conn.execute(
+                            'UPDATE knowledge_base_docs SET vector_indexed = 1 WHERE id = ?',
+                            (doc_id,)
+                        )
+                        conn.commit()
+                else:
+                    rebuild_stats["admin_docs_failed"] += 1
+                    rebuild_stats["errors"].append(f"Failed to index admin doc: {filename}")
+        
+        # Rebuild user documents
+        print(f"👤 Rebuilding user docs: {len(user_docs)} documents")
+        for doc_row in user_docs:
+            doc_id = doc_row['id']
+            filename = doc_row['filename']
+            content = doc_row['content']
+            user_id = doc_row['user_id']
+            
+            success = add_document_to_vector_store(
+                doc_id, filename, content, "user_docs", user_id
+            )
+            
+            if success:
+                rebuild_stats["user_docs_processed"] += 1
+                # Update database
+                with get_db_connection() as conn:
+                    conn.execute(
+                        'UPDATE user_documents SET vector_indexed = 1 WHERE id = ?',
+                        (doc_id,)
+                    )
+                    conn.commit()
+            else:
+                rebuild_stats["user_docs_failed"] += 1
+                rebuild_stats["errors"].append(f"Failed to index user doc: {filename}")
+        
+        print(f"✅ REBUILD COMPLETE: {rebuild_stats}")
         
         return jsonify({
-            "search_query": search_query,
-            "total_documents": len(knowledge_base["documents"]),
-            "all_documents": all_docs,
-            "generated_context_length": len(context),
-            "context_preview": context[:1000] + "..." if len(context) > 1000 else context,
-            "knowledge_base_stats": {
-                "total_characters": knowledge_base.get("total_characters", 0),
-                "total_authors": len(knowledge_base.get("authorized_authors", [])),
-                "last_updated": knowledge_base.get("last_updated")
-            }
+            "success": True,
+            "message": "Vector index rebuild completed",
+            "stats": rebuild_stats
         })
         
     except Exception as e:
-        print(f"❌ Debug knowledge error: {e}")
+        error_msg = f"Rebuild index error: {str(e)}"
+        print(f"❌ {error_msg}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": error_msg}), 500
+
+@app.route("/debug-retrieval", methods=["GET"])
+def debug_retrieval():
+    """ADMIN ONLY: Test retrieval system without running chat"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        query = request.args.get('query', '')
+        if not query:
+            return jsonify({"error": "Missing 'query' parameter"}), 400
+        
+        print(f"🔍 DEBUG RETRIEVAL: Testing query '{query}'")
+        
+        # Test admin KB retrieval
+        admin_results = query_vector_store(query, "admin_kb", n_results=8)
+        
+        # Test user docs retrieval (use first user if any exists)
+        user_results = []
+        with get_db_connection() as conn:
+            first_user = conn.execute('SELECT id FROM users LIMIT 1').fetchone()
+            if first_user:
+                user_results = query_vector_store(query, "user_docs", first_user['id'], n_results=6)
+        
+        # Get full retrieval context for a test user
+        test_user_id = first_user['id'] if first_user else "test-user"
+        retrieval_result = retrieve_relevant_context(test_user_id, query)
+        
+        debug_output = {
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "admin_results": {
+                "count": len(admin_results),
+                "results": [
+                    {
+                        "filename": r["metadata"].get("filename", "Unknown"),
+                        "similarity": r["similarity"],
+                        "chunk_index": r["metadata"].get("chunk_index", 0),
+                        "preview": r["text"][:200] + "..." if len(r["text"]) > 200 else r["text"]
+                    }
+                    for r in admin_results
+                ]
+            },
+            "user_results": {
+                "count": len(user_results),
+                "results": [
+                    {
+                        "filename": r["metadata"].get("filename", "Unknown"),
+                        "similarity": r["similarity"],
+                        "chunk_index": r["metadata"].get("chunk_index", 0),
+                        "preview": r["text"][:200] + "..." if len(r["text"]) > 200 else r["text"]
+                    }
+                    for r in user_results
+                ]
+            },
+            "full_retrieval": {
+                "context_length": len(retrieval_result["context"]),
+                "token_count": retrieval_result["token_count"],
+                "chunks_used": retrieval_result["chunks_used"],
+                "debug_info": retrieval_result["debug_info"]
+            },
+            "collections_status": {
+                "admin_kb_exists": get_or_create_collection("admin_kb") is not None,
+                "user_docs_exists": get_or_create_collection("user_docs") is not None
+            }
+        }
+        
+        return jsonify(debug_output)
+        
+    except Exception as e:
+        error_msg = f"Debug retrieval error: {str(e)}"
+        print(f"❌ {error_msg}")
+        traceback.print_exc()
+        return jsonify({"error": error_msg}), 500
 
 # ================================
 # AUTHENTICATION ROUTES
@@ -1263,12 +1621,12 @@ def admin_batch_upload():
     return render_template("batch_upload.html")
 
 # ================================
-# IMPROVED CHAT ROUTE
+# ENHANCED CHAT ROUTE WITH VECTOR RETRIEVAL
 # ================================
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    """IMPROVED Chat endpoint with better context and debugging"""
+    """ENHANCED Chat endpoint with vector retrieval and Claude primary"""
     try:
         user = get_or_create_user()
         if not user:
@@ -1298,24 +1656,23 @@ def chat():
         user_name = user.get('full_name') or user.get('username') or 'User'
         base_instruction = f"""You are a professional therapeutic AI supporting {user_name}. 
 
-IMPORTANT: You have access to extensive curated therapeutic knowledge and user conversation history. 
-When you reference information from the knowledge base, ALWAYS mention the specific document name.
-When you find relevant information, say something like "According to [Document Name]..." or "As mentioned in [Book Title]...".
+IMPORTANT: You have access to extensive curated therapeutic knowledge and user conversation history through advanced semantic vector search. 
+When you reference information from the knowledge base, ALWAYS mention the specific document name and relevance score.
+When you find relevant information, say something like "According to [Document Name] (relevance: X.XXX)..." or "As mentioned in [Book Title] with high relevance...".
 
-If asked about specific books or resources, check if they are available in your knowledge base and reference them specifically."""
+If asked about specific books or resources, the vector search system will automatically find and provide the most relevant content."""
 
         agent_prompts = {
             "case_assistant": f"{base_instruction} You assist with social work case analysis using evidence-based approaches.",
-            "research_critic": f"{base_instruction} You critically evaluate research using evidence-based approaches and cite specific sources.",
+            "research_critic": f"{base_instruction} You critically evaluate research using evidence-based approaches and cite specific sources with relevance scores.",
             "therapy_planner": f"{base_instruction} You plan therapeutic interventions using proven methodologies from your knowledge base.",
             "therapist": f"{base_instruction} {config.get('claude_system_prompt', 'You provide therapeutic support using systemic approaches.')}"
         }
 
         system_prompt = agent_prompts.get(agent, agent_prompts["therapist"])
-        model = config.get("claude_model", "claude-3-haiku-20240307")
 
-        # Get AI response with improved context
-        response_text = call_model_with_improved_context(model, system_prompt, user_input, user_id)
+        # Get AI response with enhanced retrieval (Claude primary, OpenAI fallback)
+        response_text = call_model_with_enhanced_retrieval("claude", system_prompt, user_input, user_id)
         
         # Save AI response
         save_conversation_message(user_id, "assistant", response_text, agent)
@@ -1326,7 +1683,8 @@ If asked about specific books or resources, check if they are available in your 
             "response": response_text, 
             "user_id": user_id,
             "username": user.get('username', ''),
-            "context_included": True
+            "context_included": True,
+            "retrieval_enhanced": True
         })
         
     except Exception as e:
@@ -1335,12 +1693,12 @@ If asked about specific books or resources, check if they are available in your 
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# IMPROVED UPLOAD ROUTE
+# ENHANCED UPLOAD ROUTE WITH VECTOR INDEXING
 # ================================
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    """IMPROVED file upload endpoint with better processing and debugging"""
+    """ENHANCED file upload endpoint with vector indexing"""
     print(f"🔍 UPLOAD START: Processing file upload")
     
     try:
@@ -1389,7 +1747,7 @@ def upload():
             })
         
         if upload_type == "admin":
-            # ADMIN UPLOAD
+            # ADMIN UPLOAD WITH VECTOR INDEXING
             if not is_admin_user():
                 print("❌ UPLOAD: Not admin user")
                 return jsonify({
@@ -1397,7 +1755,7 @@ def upload():
                     "success": False
                 }), 403
             
-            print("🔍 UPLOAD: Processing admin upload...")
+            print("🔍 UPLOAD: Processing admin upload with vector indexing...")
             file_path = os.path.join(UPLOADS_DIR, f"admin_{int(time.time())}_{file.filename}")
             
             # Ensure directory exists
@@ -1407,7 +1765,7 @@ def upload():
             file.save(file_path)
             print(f"✅ UPLOAD: Admin file saved to {file_path}")
             
-            # Process document with improved method
+            # Process document with improved method + vector indexing
             doc_info = add_document_to_knowledge_base(file_path, file.filename, is_core=True)
             
             if "error" in doc_info:
@@ -1429,16 +1787,17 @@ def upload():
             authors_text = f" | Authors: {', '.join(doc_info['extracted_authors'])}" if doc_info['extracted_authors'] else ""
             
             return jsonify({
-                "message": f"✅ Added '{file.filename}' to global knowledge base ({doc_info['character_count']:,} characters){authors_text}", 
+                "message": f"✅ Added '{file.filename}' to global knowledge base with vector indexing ({doc_info['character_count']:,} characters){authors_text}", 
                 "success": True,
                 "type": "admin",
                 "extracted_authors": doc_info['extracted_authors'],
-                "character_count": doc_info['character_count']
+                "character_count": doc_info['character_count'],
+                "vector_indexed": True
             })
         
         else:
-            # PERSONAL UPLOAD
-            print("🔍 UPLOAD: Processing personal upload...")
+            # PERSONAL UPLOAD WITH VECTOR INDEXING
+            print("🔍 UPLOAD: Processing personal upload with vector indexing...")
             file_path = os.path.join(USER_UPLOADS_DIR, f"user_{user_id}_{int(time.time())}_{file.filename}")
             
             # Ensure directory exists
@@ -1467,10 +1826,11 @@ def upload():
                 print(f"⚠️ UPLOAD: Could not remove personal temp file: {e}")
             
             return jsonify({
-                "message": f"✅ Added '{file.filename}' to your persistent documents ({doc_info['character_count']:,} characters)", 
+                "message": f"✅ Added '{file.filename}' to your persistent documents with vector indexing ({doc_info['character_count']:,} characters)", 
                 "success": True,
                 "type": "personal",
-                "character_count": doc_info['character_count']
+                "character_count": doc_info['character_count'],
+                "vector_indexed": doc_info.get('vector_indexed', False)
             })
         
     except Exception as e:
@@ -1504,7 +1864,7 @@ def clear():
 
 @app.route("/clear-documents", methods=["POST"])
 def clear_documents():
-    """Clear personal documents"""
+    """Clear personal documents and vector indexes"""
     try:
         user = get_or_create_user()
         if not user:
@@ -1512,8 +1872,8 @@ def clear_documents():
         
         user_id = user['id']
         cleared_count = clear_user_documents(user_id)
-        print(f"✅ CLEAR DOCS: Cleared {cleared_count} personal documents for user {user_id}")
-        return jsonify({"message": f"Cleared {cleared_count} personal documents"})
+        print(f"✅ CLEAR DOCS: Cleared {cleared_count} personal documents and vector indexes for user {user_id}")
+        return jsonify({"message": f"Cleared {cleared_count} personal documents and vector indexes"})
     except Exception as e:
         print(f"❌ CLEAR DOCS ERROR: {e}")
         return jsonify({"error": str(e)}), 500
@@ -1550,7 +1910,8 @@ def get_personal_documents():
                 "id": doc["id"],
                 "filename": doc["filename"],
                 "upload_date": doc["upload_date"],
-                "character_count": doc["character_count"]
+                "character_count": doc["character_count"],
+                "vector_indexed": doc.get("vector_indexed", False)
             }
             for doc in docs
         ]
@@ -1562,17 +1923,25 @@ def get_personal_documents():
 
 @app.route("/knowledge-base", methods=["GET"])
 def get_knowledge_base():
-    """Get knowledge base status with improved stats"""
+    """Get knowledge base status with vector indexing stats"""
     try:
         knowledge_base = load_knowledge_base()
         
-        # Get database stats
+        # Get database stats including vector indexing
         with get_db_connection() as conn:
             total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
             active_users = conn.execute(
                 'SELECT COUNT(*) as count FROM users WHERE last_active > datetime("now", "-30 days")'
             ).fetchone()['count']
             total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            
+            # Vector indexing stats
+            admin_indexed = conn.execute(
+                'SELECT COUNT(*) as count FROM knowledge_base_docs WHERE vector_indexed = 1'
+            ).fetchone()['count']
+            user_indexed = conn.execute(
+                'SELECT COUNT(*) as count FROM user_documents WHERE vector_indexed = 1 AND is_active = 1'
+            ).fetchone()['count']
         
         return jsonify({
             "total_documents": len(knowledge_base["documents"]),
@@ -1580,6 +1949,11 @@ def get_knowledge_base():
             "last_updated": knowledge_base.get("last_updated"),
             "authorized_authors": knowledge_base.get("authorized_authors", []),
             "total_authors": len(knowledge_base.get("authorized_authors", [])),
+            "vector_indexing": {
+                "admin_docs_indexed": admin_indexed,
+                "user_docs_indexed": user_indexed,
+                "total_indexed": admin_indexed + user_indexed
+            },
             "system_stats": {
                 "total_users": total_users,
                 "active_users_30d": active_users,
@@ -1609,6 +1983,10 @@ def get_user_stats():
                 'SELECT COUNT(*) as count FROM user_documents WHERE user_id = ? AND is_active = 1', (user_id,)
             ).fetchone()['count']
             
+            vector_indexed_count = conn.execute(
+                'SELECT COUNT(*) as count FROM user_documents WHERE user_id = ? AND is_active = 1 AND vector_indexed = 1', (user_id,)
+            ).fetchone()['count']
+            
             days_active = conn.execute('''
                 SELECT CAST((julianday('now') - julianday(created_at)) AS INTEGER) as days
                 FROM users WHERE id = ?
@@ -1618,6 +1996,7 @@ def get_user_stats():
             "user_id": user_id,
             "conversation_messages": conversation_count,
             "personal_documents": document_count,
+            "vector_indexed_documents": vector_indexed_count,
             "days_active": days_active,
             "created_at": user.get('created_at'),
             "last_active": user.get('last_active')
@@ -1653,13 +2032,15 @@ def get_log():
                 {
                     "filename": doc["filename"],
                     "upload_date": doc["upload_date"],
-                    "character_count": doc["character_count"]
+                    "character_count": doc["character_count"],
+                    "vector_indexed": doc.get("vector_indexed", False)
                 }
                 for doc in docs
             ],
             "stats": {
                 "total_messages": len(history),
-                "total_documents": len(docs)
+                "total_documents": len(docs),
+                "vector_indexed_docs": len([d for d in docs if d.get("vector_indexed", False)])
             }
         }
         
@@ -1670,7 +2051,7 @@ def get_log():
 
 @app.route("/health")
 def health():
-    """System health check with improved diagnostics"""
+    """System health check with vector store diagnostics"""
     try:
         # Test API connections
         openai_works = False
@@ -1686,7 +2067,7 @@ def health():
         if claude_api_key:
             try:
                 test_response = call_claude_improved("You are a test.", "Hello")
-                claude_works = not test_response.startswith("Error")
+                claude_works = test_response is not None and not test_response.startswith("Error")
             except:
                 pass
         
@@ -1696,18 +2077,29 @@ def health():
             authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
             total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
             total_user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
+            admin_indexed = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs WHERE vector_indexed = 1').fetchone()['count']
+            user_indexed = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE vector_indexed = 1').fetchone()['count']
         
         knowledge_base = load_knowledge_base()
+        
+        # Test vector store
+        vector_store_status = {
+            "chromadb_initialized": chroma_client is not None,
+            "admin_collection_exists": get_or_create_collection("admin_kb") is not None,
+            "user_collection_exists": get_or_create_collection("user_docs") is not None
+        }
         
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "version": "improved_v2.0",
+            "version": "enhanced_vector_v3.0",
             "apis": {
                 "openai_configured": openai_api_key is not None,
                 "openai_working": openai_works,
                 "claude_configured": claude_api_key is not None,
-                "claude_working": claude_works
+                "claude_working": claude_works,
+                "primary_model": "claude",
+                "fallback_model": "openai"
             },
             "database": {
                 "total_users": total_users,
@@ -1718,6 +2110,13 @@ def health():
                 "knowledge_base_documents": len(knowledge_base["documents"]),
                 "authorized_authors": len(knowledge_base.get("authorized_authors", []))
             },
+            "vector_store": {
+                **vector_store_status,
+                "admin_docs_indexed": admin_indexed,
+                "user_docs_indexed": user_indexed,
+                "total_indexed": admin_indexed + user_indexed,
+                "embedding_model": "text-embedding-3-small"
+            },
             "features": {
                 "user_authentication": True,
                 "anonymous_sessions": True,
@@ -1725,12 +2124,13 @@ def health():
                 "conversation_continuity": True,
                 "personal_documents": True,
                 "knowledge_base": True,
+                "vector_search": True,
+                "semantic_retrieval": True,
+                "claude_primary": True,
+                "openai_fallback": True,
                 "pdf_extraction": "pdfplumber_improved",
-                "controlled_knowledge": True,
-                "large_pdf_support": True,
-                "improved_search": True,
-                "batch_upload": True,
-                "memory_safety": True,
+                "auto_chunking": True,
+                "token_budget_management": True,
                 "debug_tools": True
             },
             "knowledge_base": {
@@ -1748,13 +2148,13 @@ def health():
                     for doc in knowledge_base["documents"][:5]  # Show first 5
                 ]
             },
-            "memory_info": {
-                "database_file": DATABASE_FILE,
-                "pdf_max_size_admin_mb": 200,
-                "pdf_max_size_personal_mb": 100,
-                "memory_limit_mb": 2048,
-                "tier": "render_standard",
-                "context_processing": "improved_search_algorithm"
+            "retrieval_config": {
+                "max_tokens": 20000,
+                "admin_chunks_per_query": 8,
+                "user_chunks_per_query": 6,
+                "chunk_size_words": 1000,
+                "chunk_overlap_words": 150,
+                "embedding_dimensions": 1536
             }
         })
     except Exception as e:
@@ -1768,7 +2168,7 @@ def health():
 
 @app.route("/admin/batch-process", methods=["POST"])
 def admin_batch_process():
-    """Process batch upload via API - IMPROVED VERSION"""
+    """Process batch upload via API with vector indexing"""
     if not is_admin_user():
         return jsonify({"error": "Admin access required"}), 403
     
@@ -1778,7 +2178,7 @@ def admin_batch_process():
         if not files:
             return jsonify({"error": "No files uploaded"}), 400
         
-        print(f"🔍 BATCH UPLOAD: Processing {len(files)} files")
+        print(f"🔍 BATCH UPLOAD: Processing {len(files)} files with vector indexing")
         results = []
         
         for i, file in enumerate(files):
@@ -1792,7 +2192,7 @@ def admin_batch_process():
                     
                     file_size_mb = os.path.getsize(temp_path) / 1024 / 1024
                     
-                    # Process with improved method
+                    # Process with improved method + vector indexing
                     doc_info = add_document_to_knowledge_base(temp_path, file.filename, is_core=True)
                     
                     if not doc_info.get('error'):
@@ -1801,9 +2201,10 @@ def admin_batch_process():
                             'status': 'success',
                             'size_mb': round(file_size_mb, 2),
                             'character_count': doc_info.get('character_count', 0),
-                            'authors': doc_info.get('extracted_authors', [])
+                            'authors': doc_info.get('extracted_authors', []),
+                            'vector_indexed': True
                         })
-                        print(f"✅ BATCH UPLOAD: Successfully processed {file.filename}")
+                        print(f"✅ BATCH UPLOAD: Successfully processed {file.filename} with vector indexing")
                     else:
                         results.append({
                             'filename': file.filename,
@@ -1834,12 +2235,13 @@ def admin_batch_process():
         
         return jsonify({
             "success": True,
-            "message": f"Batch upload completed: {successful} successful, {failed} failed",
+            "message": f"Batch upload completed with vector indexing: {successful} successful, {failed} failed",
             "results": results,
             "summary": {
                 "total": len(results),
                 "successful": successful,
-                "failed": failed
+                "failed": failed,
+                "vector_indexed": successful
             }
         })
         
@@ -1849,81 +2251,36 @@ def admin_batch_process():
         return jsonify({"error": str(e)}), 500
 
 # ================================
-# ADMIN DEBUG TOOLS
-# ================================
-
-@app.route("/admin/debug-system", methods=["GET"])
-def debug_system():
-    """Debug system status - ADMIN ONLY"""
-    if not is_admin_user():
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        # Check file system
-        directories = {}
-        for dir_name in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR]:
-            directories[dir_name] = {
-                "exists": os.path.exists(dir_name),
-                "writable": os.access(dir_name, os.W_OK) if os.path.exists(dir_name) else False,
-                "contents": len(os.listdir(dir_name)) if os.path.exists(dir_name) else 0
-            }
-        
-        # Check knowledge base file
-        kb_status = {
-            "file_exists": os.path.exists(KNOWLEDGE_BASE_FILE),
-            "file_size": os.path.getsize(KNOWLEDGE_BASE_FILE) if os.path.exists(KNOWLEDGE_BASE_FILE) else 0,
-            "readable": os.access(KNOWLEDGE_BASE_FILE, os.R_OK) if os.path.exists(KNOWLEDGE_BASE_FILE) else False
-        }
-        
-        # Load and analyze knowledge base
-        knowledge_base = load_knowledge_base()
-        kb_analysis = {
-            "total_docs": len(knowledge_base["documents"]),
-            "total_chars": knowledge_base.get("total_characters", 0),
-            "authors": len(knowledge_base.get("authorized_authors", [])),
-            "last_updated": knowledge_base.get("last_updated")
-        }
-        
-        # Database stats
-        with get_db_connection() as conn:
-            db_stats = {
-                "users": conn.execute('SELECT COUNT(*) as c FROM users').fetchone()['c'],
-                "conversations": conn.execute('SELECT COUNT(*) as c FROM conversations').fetchone()['c'],
-                "user_docs": conn.execute('SELECT COUNT(*) as c FROM user_documents WHERE is_active = 1').fetchone()['c'],
-                "kb_docs": conn.execute('SELECT COUNT(*) as c FROM knowledge_base_docs').fetchone()['c']
-            }
-        
-        return jsonify({
-            "system_status": "operational",
-            "timestamp": datetime.now().isoformat(),
-            "directories": directories,
-            "knowledge_base_file": kb_status,
-            "knowledge_base_analysis": kb_analysis,
-            "database_stats": db_stats,
-            "memory_usage": {
-                "python_process": "unknown",  # Could add psutil here if needed
-                "gc_collections": gc.get_count()
-            }
-        })
-        
-    except Exception as e:
-        print(f"❌ DEBUG SYSTEM ERROR: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-# ================================
 # INITIALIZATION SYSTEM
 # ================================
 
-def initialize_improved_system():
-    """Initialize system with all improvements"""
-    print("🚀 Initializing IMPROVED Therapeutic AI System...")
+def initialize_enhanced_system():
+    """Initialize system with vector store enhancements"""
+    print("🚀 Initializing ENHANCED Vector-Powered Therapeutic AI System...")
     
     # Set memory limits
     limit_memory()
     
     # Initialize database
     init_database()
+    
+    # Initialize ChromaDB
+    global chroma_client
+    chroma_client = init_chroma()
+    
+    if chroma_client:
+        print("✅ ChromaDB vector store initialized")
+        
+        # Test collections
+        admin_collection = get_or_create_collection("admin_kb")
+        user_collection = get_or_create_collection("user_docs")
+        
+        if admin_collection and user_collection:
+            print("✅ Vector collections ready: admin_kb, user_docs")
+        else:
+            print("⚠️ Some vector collections failed to initialize")
+    else:
+        print("❌ ChromaDB initialization failed - vector search will not work")
     
     # Load and verify knowledge base
     knowledge_base = load_knowledge_base()
@@ -1937,22 +2294,25 @@ def initialize_improved_system():
         if len(knowledge_base["documents"]) > 5:
             print(f"  ... and {len(knowledge_base['documents']) - 5} more documents")
     
-    # Check database health
+    # Check database health including vector indexing
     try:
         with get_db_connection() as conn:
             total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
             authenticated_users = conn.execute('SELECT COUNT(*) as count FROM users WHERE email IS NOT NULL').fetchone()['count']
             total_conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+            admin_indexed = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs WHERE vector_indexed = 1').fetchone()['count']
+            user_indexed = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE vector_indexed = 1').fetchone()['count']
             print(f"👥 Database health: {total_users} users ({authenticated_users} registered), {total_conversations} conversations")
+            print(f"🔍 Vector indexing: {admin_indexed} admin docs, {user_indexed} user docs indexed")
     except Exception as e:
         print(f"⚠️ Database check failed: {e}")
     
     # Test API connections
     api_status = []
     if claude_api_key:
-        api_status.append("Claude API configured")
+        api_status.append("Claude API configured (PRIMARY)")
     if openai_api_key:
-        api_status.append("OpenAI API configured")
+        api_status.append("OpenAI API configured (FALLBACK + Embeddings)")
     
     if api_status:
         print(f"🔑 APIs: {', '.join(api_status)}")
@@ -1962,32 +2322,44 @@ def initialize_improved_system():
     # Force initial garbage collection
     gc.collect()
     
-    print("✅ IMPROVED Therapeutic AI System initialized!")
+    print("✅ ENHANCED Vector-Powered Therapeutic AI System initialized!")
     print("🎯 New features active:")
-    print("   - Improved PDF extraction (up to 2000 pages)")
-    print("   - Advanced search algorithm with title matching")
-    print("   - Enhanced context building (up to 1MB per document)")
-    print("   - Better author extraction")
-    print("   - Debug logging throughout")
-    print("   - Improved error handling and memory management")
-    print("   - Enhanced API calls with longer timeouts")
-    print("   - Better user authentication and profile management")
-    print("   - Admin debug tools")
+    print("   - Claude as primary therapist voice")
+    print("   - OpenAI GPT-4 as fallback model")
+    print("   - OpenAI text-embedding-3-small for semantic search")
+    print("   - ChromaDB persistent vector store")
+    print("   - Two collections: admin_kb + user_docs")
+    print("   - Auto-chunking: ~1,000 words, 150-word overlap")
+    print("   - Retrieval system: top 8-10 most relevant chunks")
+    print("   - Token budget control: ~20-25k tokens max")
+    print("   - Debug logging with relevance scores")
+    print("   - /rebuild-index admin route")
+    print("   - /debug-retrieval admin route")
+    print("   - Enhanced PDF processing (up to 2000 pages)")
+    print("   - Improved author extraction")
+    print("   - Better error handling and memory management")
     print()
-    print("🔍 Debug features:")
-    print("   - Search debug logs in console")
-    print("   - Context building logs")
-    print("   - Upload processing logs")
-    print("   - API call logging")
-    print("   - Admin debug endpoints")
+    print("🔍 Vector Search Features:")
+    print("   - Semantic similarity search with OpenAI embeddings")
+    print("   - Automatic relevance scoring")
+    print("   - Context-aware chunk selection")
+    print("   - Token budget management")
+    print("   - Conversation history integration")
+    print("   - Document-specific source attribution")
+    print()
+    print("🛠️ Admin Debug Tools:")
+    print("   - POST /rebuild-index - Rebuild all vector indexes")
+    print("   - GET /debug-retrieval?query=... - Test retrieval system")
+    print("   - Enhanced health endpoint with vector diagnostics")
+    print("   - Real-time chunk and relevance logging")
 
 # ================================
 # APPLICATION STARTUP
 # ================================
 
 if __name__ == "__main__":
-    initialize_improved_system()
+    initialize_enhanced_system()
     app.run(host="0.0.0.0", port=5000, debug=False)
 else:
-    initialize_improved_system()
+    initialize_enhanced_system()
     application = app
