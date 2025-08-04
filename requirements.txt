@@ -1,9 +1,26 @@
+# Core Flask Dependencies
 flask==2.3.3
 gunicorn==21.2.0
 python-dotenv==1.0.0
 requests==2.32.4
+
+# PDF Processing
 pdfplumber==0.9.0
+
+# System Monitoring
 psutil==5.9.8
-chromadb==0.5.3
+
+# AI/ML Dependencies
 openai==1.35.10
 tiktoken==0.7.0
+
+# Vector Store & Embeddings
+chromadb==0.5.3
+numpy==1.24.3
+
+# Database & Storage
+# sqlite3 is built into Python - no need to install
+
+# Additional utilities (if needed)
+# bleach==6.0.0  # For input sanitization (uncomment if needed)
+# werkzeug==2.3.7  # For secure filename handling (usually included with Flask)
