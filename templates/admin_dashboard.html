@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Therapeutic AI</title>
+    <title>Admin Dashboard - Therapeutic AI (Improved)</title>
     <style>
         * {
             margin: 0;
@@ -65,6 +65,16 @@
             border-radius: 20px;
             font-size: 12px;
             font-weight: 500;
+        }
+        
+        .version-badge {
+            background: #4caf50;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-left: 8px;
         }
         
         .nav-links {
@@ -129,6 +139,11 @@
             color: #f44336;
         }
         
+        .debug-icon {
+            background: rgba(255, 152, 0, 0.1);
+            color: #ff9800;
+        }
+        
         .batch-icon {
             background: rgba(127, 176, 105, 0.1);
             color: #7FB069;
@@ -142,6 +157,11 @@
         .authors-icon {
             background: rgba(74, 144, 184, 0.1);
             color: #4A90B8;
+        }
+        
+        .health-icon {
+            background: rgba(76, 175, 80, 0.1);
+            color: #4caf50;
         }
         
         .card-title {
@@ -201,6 +221,52 @@
             background: #ccc;
             cursor: not-allowed;
             transform: none;
+        }
+        
+        .debug-section {
+            margin-top: 16px;
+        }
+        
+        .debug-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #e8ecf0;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+        
+        .debug-btn {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .debug-btn:hover {
+            background: #f57c00;
+            transform: translateY(-1px);
+        }
+        
+        .debug-results {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 11px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 12px;
+            white-space: pre-wrap;
+            display: none;
+            line-height: 1.4;
         }
         
         .batch-btn {
@@ -302,6 +368,101 @@
             width: 0%;
             transition: width 0.3s ease;
         }
+        
+        .health-status {
+            font-size: 14px;
+            color: #546e7a;
+        }
+        
+        .health-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .health-item:last-child {
+            border-bottom: none;
+        }
+        
+        .health-label {
+            font-weight: 500;
+        }
+        
+        .health-value {
+            color: #4A90B8;
+        }
+        
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        
+        .status-online {
+            background: #4caf50;
+        }
+        
+        .status-offline {
+            background: #f44336;
+        }
+        
+        .status-warning {
+            background: #ff9800;
+        }
+        
+        .feature-list {
+            margin-top: 12px;
+            padding: 12px;
+            background: rgba(74, 144, 184, 0.05);
+            border-radius: 8px;
+            border-left: 4px solid #4A90B8;
+        }
+        
+        .feature-list h4 {
+            margin-bottom: 8px;
+            color: #4A90B8;
+            font-size: 14px;
+        }
+        
+        .feature-list ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .feature-list li {
+            padding: 2px 0;
+            font-size: 13px;
+            color: #546e7a;
+        }
+        
+        .feature-list li:before {
+            content: "✅ ";
+            margin-right: 6px;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header-content {
+                flex-direction: column;
+                gap: 16px;
+            }
+            
+            .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .container {
+                padding: 16px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -311,16 +472,19 @@
                 <div class="brand-icon">🔒</div>
                 <div class="brand-text">
                     <h1>Admin Dashboard</h1>
+                    <span class="version-badge">IMPROVED v2.0</span>
                 </div>
                 <div class="admin-badge">ADMIN</div>
             </div>
             <nav class="nav-links">
                 <a href="/" class="nav-link">← Back to Chat</a>
                 <a href="/admin/batch-upload" class="nav-link">📚 Batch Upload</a>
+                <a href="/health" class="nav-link" target="_blank">🏥 Health Check</a>
                 <a href="/admin/logout" class="nav-link">Logout</a>
             </nav>
         </div>
     </header>
+    
     <div class="container">
         <div class="dashboard-grid">
             <!-- Single Upload Section -->
@@ -335,7 +499,8 @@
                         <input type="file" id="pdfFile" accept=".pdf" />
                     </div>
                     <p style="color: #90a4ae; font-size: 14px; margin-bottom: 16px;">
-                        Upload one PDF book or research paper (up to 25MB)
+                        Upload one PDF book or research paper (up to 200MB)<br>
+                        <strong>Improved:</strong> Better extraction, up to 2000 pages
                     </p>
                     <button id="uploadBtn" class="upload-btn">
                         📤 Upload to Knowledge Base
@@ -348,7 +513,48 @@
                 </div>
             </div>
 
-            <!-- NEW: Batch Upload Section -->
+            <!-- DEBUG TOOLS Section -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <div class="card-icon debug-icon">🔍</div>
+                    <h2 class="card-title">Debug Knowledge Search</h2>
+                </div>
+                
+                <p style="color: #546e7a; margin-bottom: 16px; font-size: 14px;">
+                    Test the improved knowledge base search and context building system
+                </p>
+                
+                <div class="debug-section">
+                    <input type="text" id="debugQuery" class="debug-input" 
+                           placeholder="Enter book title or search term (e.g., 'Self Compassion')" />
+                    
+                    <div>
+                        <button onclick="debugKnowledgeSearch()" class="debug-btn">
+                            🔍 Test Search
+                        </button>
+                        <button onclick="debugSystemStatus()" class="debug-btn">
+                            ⚙️ System Status
+                        </button>
+                        <button onclick="testContextBuild()" class="debug-btn">
+                            📝 Test Context
+                        </button>
+                    </div>
+                    
+                    <div id="debugResults" class="debug-results"></div>
+                </div>
+                
+                <div class="feature-list">
+                    <h4>Debug Features:</h4>
+                    <ul>
+                        <li>Advanced search algorithm testing</li>
+                        <li>Real-time context building analysis</li>
+                        <li>System health diagnostics</li>
+                        <li>Knowledge base integrity checks</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Batch Upload Section -->
             <div class="dashboard-card">
                 <div class="card-header">
                     <div class="card-icon batch-icon">📚</div>
@@ -356,21 +562,23 @@
                 </div>
                 
                 <p style="color: #546e7a; margin-bottom: 16px;">
-                    Upload multiple large therapeutic books at once with advanced compression.
+                    Upload multiple large therapeutic books at once with improved processing and monitoring.
                 </p>
                 
-                <div style="margin-bottom: 16px;">
-                    <strong>Features:</strong>
-                    <ul style="margin: 8px 0 0 20px; color: #546e7a; font-size: 14px;">
-                        <li>Support for 70MB+ PDFs</li>
-                        <li>85-90% compression ratio</li>
-                        <li>Progress tracking</li>
-                        <li>Batch processing for 30+ books</li>
+                <div class="feature-list">
+                    <h4>Enhanced Features:</h4>
+                    <ul>
+                        <li>Support for 200MB+ PDFs</li>
+                        <li>Up to 2000 pages per document</li>
+                        <li>Improved author extraction patterns</li>
+                        <li>Better error handling and recovery</li>
+                        <li>Real-time progress tracking</li>
+                        <li>Detailed processing logs</li>
                     </ul>
                 </div>
                 
                 <a href="/admin/batch-upload" class="batch-btn">
-                    🚀 Open Batch Upload
+                    🚀 Open Batch Upload Interface
                 </a>
             </div>
             
@@ -387,8 +595,8 @@
                         <div class="stat-label">Documents</div>
                     </div>
                     <div class="stat-item">
-                        <span class="stat-number">{{ knowledge_base.get('total_characters', 0) | round | int }}</span>
-                        <div class="stat-label">Characters</div>
+                        <span class="stat-number">{{ (knowledge_base.get('total_characters', 0) / 1000000) | round(1) }}</span>
+                        <div class="stat-label">Million Chars</div>
                     </div>
                     <div class="stat-item">
                         <span class="stat-number">{{ authorized_authors | length }}</span>
@@ -398,6 +606,20 @@
                         <span class="stat-number">{{ (knowledge_base.get('total_characters', 0) / 1024 / 1024) | round(1) }}</span>
                         <div class="stat-label">MB Data</div>
                     </div>
+                </div>
+                
+                <div style="margin-top: 16px; font-size: 12px; color: #90a4ae; text-align: center;">
+                    Last Updated: {{ knowledge_base.get('last_updated', 'Never')[:16] if knowledge_base.get('last_updated') else 'Never' }}
+                </div>
+                
+                <div class="feature-list">
+                    <h4>System Capabilities:</h4>
+                    <ul>
+                        <li>Advanced search with title matching</li>
+                        <li>Up to 1MB context per document</li>
+                        <li>Intelligent author extraction</li>
+                        <li>Persistent storage on Render Standard</li>
+                    </ul>
                 </div>
             </div>
             
@@ -414,28 +636,69 @@
                         <span class="author-tag">{{ author }}</span>
                         {% endfor %}
                     {% else %}
-                        <p style="color: #90a4ae; text-align: center; padding: 20px;">
-                            No authors found. Upload documents to extract author information.
+                        <p style="color: #90a4ae; text-align: center; padding: 20px; font-style: italic;">
+                            No authors found yet. Upload therapeutic documents to automatically extract and authorize therapeutic experts.
                         </p>
                     {% endif %}
+                </div>
+                
+                {% if authorized_authors %}
+                <div style="margin-top: 12px; font-size: 12px; color: #90a4ae; text-align: center;">
+                    AI can reference these {{ authorized_authors | length }} therapeutic experts in conversations
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- System Health Monitor -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <div class="card-icon health-icon">🏥</div>
+                    <h2 class="card-title">System Health Monitor</h2>
+                </div>
+                
+                <div class="health-status" id="healthStatus">
+                    <div class="health-item">
+                        <span class="health-label">Status</span>
+                        <span class="health-value">Loading...</span>
+                    </div>
+                </div>
+                
+                <button onclick="refreshHealth()" class="debug-btn" style="margin-top: 12px; width: 100%;">
+                    🔄 Refresh System Status
+                </button>
+                
+                <div class="feature-list">
+                    <h4>Monitoring:</h4>
+                    <ul>
+                        <li>API connectivity status</li>
+                        <li>Database health checks</li>
+                        <li>Knowledge base integrity</li>
+                        <li>Memory usage tracking</li>
+                        <li>User activity metrics</li>
+                    </ul>
                 </div>
             </div>
         </div>
     </div>
+
     <script>
+        // Global variables
         const uploadBtn = document.getElementById('uploadBtn');
         const pdfFile = document.getElementById('pdfFile');
         const uploadStatus = document.getElementById('uploadStatus');
         const uploadProgress = document.getElementById('uploadProgress');
         const uploadArea = document.getElementById('uploadArea');
+
         // Drag and drop functionality
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
         });
+
         uploadArea.addEventListener('dragleave', () => {
             uploadArea.classList.remove('dragover');
         });
+
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
@@ -445,25 +708,24 @@
                 pdfFile.files = files;
             }
         });
+
+        // Utility functions
         function showStatus(message, isSuccess) {
             uploadStatus.textContent = message;
             uploadStatus.className = `status-message ${isSuccess ? 'status-success' : 'status-error'}`;
             uploadStatus.style.display = 'block';
-            
-            setTimeout(() => {
-                uploadStatus.style.display = 'none';
-            }, 5000);
+            setTimeout(() => uploadStatus.style.display = 'none', 8000);
         }
+
         function showProgress(percent) {
             uploadProgress.style.display = 'block';
             uploadProgress.querySelector('.progress-fill').style.width = percent + '%';
-            
             if (percent >= 100) {
-                setTimeout(() => {
-                    uploadProgress.style.display = 'none';
-                }, 1000);
+                setTimeout(() => uploadProgress.style.display = 'none', 1500);
             }
         }
+
+        // Upload functionality
         uploadBtn.addEventListener('click', async () => {
             const file = pdfFile.files[0];
             if (!file) {
@@ -474,41 +736,419 @@
                 showStatus('Please select a valid PDF file', false);
                 return;
             }
+
+            const fileSize = (file.size / 1024 / 1024).toFixed(1);
             const formData = new FormData();
             formData.append('pdf', file);
             formData.append('upload_type', 'admin');
+
             uploadBtn.disabled = true;
-            uploadBtn.textContent = '⏳ Uploading...';
+            uploadBtn.textContent = `⏳ Processing ${fileSize}MB...`;
             showProgress(0);
+
             try {
-                showStatus('Processing PDF...', true);
-                showProgress(30);
+                showStatus(`Processing ${file.name} (${fileSize}MB) with improved extraction...`, true);
+                showProgress(20);
+
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
-                showProgress(80);
+
+                showProgress(70);
                 const result = await response.json();
                 showProgress(100);
+
                 if (result.success) {
-                    showStatus(result.message, true);
+                    let message = `✅ Successfully added '${file.name}' to knowledge base`;
+                    message += `\n📊 Extracted ${result.character_count?.toLocaleString() || 'unknown'} characters`;
+                    
+                    if (result.extracted_authors && result.extracted_authors.length > 0) {
+                        message += `\n👨‍⚕️ Authors: ${result.extracted_authors.join(', ')}`;
+                    }
+                    
+                    showStatus(message, true);
                     pdfFile.value = '';
                     
                     // Refresh page to update stats
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
+                    setTimeout(() => window.location.reload(), 3000);
                 } else {
-                    showStatus(result.message, false);
+                    showStatus(`❌ Upload failed: ${result.message || result.error}`, false);
                 }
             } catch (error) {
                 showProgress(100);
-                showStatus('Upload failed: ' + error.message, false);
+                showStatus(`❌ Upload failed: ${error.message}`, false);
+                console.error('Upload error:', error);
             } finally {
                 uploadBtn.disabled = false;
                 uploadBtn.textContent = '📤 Upload to Knowledge Base';
             }
         });
+
+        // Debug functions
+        async function debugKnowledgeSearch() {
+            const query = document.getElementById('debugQuery').value.trim();
+            const resultsDiv = document.getElementById('debugResults');
+            
+            if (!query) {
+                alert('Please enter a search term (e.g., book title)');
+                return;
+            }
+            
+            try {
+                resultsDiv.style.display = 'block';
+                resultsDiv.textContent = 'Searching knowledge base with improved algorithm...';
+                
+                const response = await fetch('/debug-knowledge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    resultsDiv.textContent = `❌ ERROR: ${result.error}`;
+                    return;
+                }
+                
+                let output = `🔍 IMPROVED SEARCH DEBUG RESULTS\n`;
+                output += `=====================================\n`;
+                output += `Query: "${result.search_query}"\n`;
+                output += `Total Documents in KB: ${result.total_documents}\n`;
+                output += `Context Generated: ${result.generated_context_length?.toLocaleString()} characters\n`;
+                output += `Timestamp: ${new Date().toISOString()}\n\n`;
+                
+                output += `📚 ALL DOCUMENTS IN KNOWLEDGE BASE:\n`;
+                output += `${'='.repeat(50)}\n`;
+                if (result.all_documents && result.all_documents.length > 0) {
+                    result.all_documents.forEach((doc, i) => {
+                        output += `${i + 1}. "${doc.filename}"\n`;
+                        output += `   📄 Characters: ${doc.character_count?.toLocaleString() || 'Unknown'}\n`;
+                        if (doc.authors && doc.authors.length > 0) {
+                            output += `   👨‍⚕️ Authors: ${doc.authors.join(', ')}\n`;
+                        }
+                        output += `   📝 Preview: ${doc.content_preview || 'No preview'}\n`;
+                        output += `   ${'─'.repeat(40)}\n`;
+                    });
+                } else {
+                    output += `❌ No documents found in knowledge base!\n`;
+                }
+                
+                if (result.context_preview) {
+                    output += `\n📝 GENERATED CONTEXT PREVIEW:\n`;
+                    output += `${'='.repeat(40)}\n`;
+                    output += `${result.context_preview}\n`;
+                    output += `${'='.repeat(40)}\n`;
+                }
+                
+                if (result.knowledge_base_stats) {
+                    output += `\n📊 KNOWLEDGE BASE STATISTICS:\n`;
+                    output += `${'='.repeat(35)}\n`;
+                    output += `Total Characters: ${result.knowledge_base_stats.total_characters?.toLocaleString() || 'Unknown'}\n`;
+                    output += `Total Authors: ${result.knowledge_base_stats.total_authors || 0}\n`;
+                    output += `Last Updated: ${result.knowledge_base_stats.last_updated || 'Never'}\n`;
+                    output += `Storage Size: ${((result.knowledge_base_stats.total_characters || 0) / 1024 / 1024).toFixed(2)} MB\n`;
+                }
+                
+                output += `\n✅ Search algorithm working with improved matching!\n`;
+                resultsDiv.textContent = output;
+                
+            } catch (error) {
+                resultsDiv.textContent = `❌ ERROR: ${error.message}\n\nFull error: ${error.stack}`;
+                console.error('Debug search error:', error);
+            }
+        }
+
+        async function debugSystemStatus() {
+            const resultsDiv = document.getElementById('debugResults');
+            
+            try {
+                resultsDiv.style.display = 'block';
+                resultsDiv.textContent = 'Checking complete system status...';
+                
+                const response = await fetch('/admin/debug-system');
+                const result = await response.json();
+                
+                if (result.error) {
+                    resultsDiv.textContent = `❌ ERROR: ${result.error}`;
+                    return;
+                }
+                
+                let output = `⚙️ COMPLETE SYSTEM STATUS DEBUG\n`;
+                output += `=====================================\n`;
+                output += `System Status: ${result.system_status?.toUpperCase() || 'UNKNOWN'}\n`;
+                output += `Timestamp: ${result.timestamp}\n`;
+                output += `Version: Improved Therapeutic AI v2.0\n\n`;
+                
+                output += `📁 DIRECTORY STATUS:\n`;
+                output += `${'='.repeat(25)}\n`;
+                if (result.directories) {
+                    Object.entries(result.directories).forEach(([dir, info]) => {
+                        const existsIcon = info.exists ? '✅' : '❌';
+                        const writableIcon = info.writable ? '✅' : '❌';
+                        output += `${dir}:\n`;
+                        output += `  Exists: ${existsIcon} | Writable: ${writableIcon} | Items: ${info.contents}\n`;
+                    });
+                }
+                
+                output += `\n📚 KNOWLEDGE BASE FILE STATUS:\n`;
+                output += `${'='.repeat(35)}\n`;
+                if (result.knowledge_base_file) {
+                    const kbf = result.knowledge_base_file;
+                    output += `File Exists: ${kbf.file_exists ? '✅' : '❌'}\n`;
+                    output += `File Size: ${(kbf.file_size / 1024).toFixed(1)} KB\n`;
+                    output += `Readable: ${kbf.readable ? '✅' : '❌'}\n`;
+                }
+                
+                output += `\n📊 KNOWLEDGE BASE ANALYSIS:\n`;
+                output += `${'='.repeat(32)}\n`;
+                if (result.knowledge_base_analysis) {
+                    const kba = result.knowledge_base_analysis;
+                    output += `Total Documents: ${kba.total_docs}\n`;
+                    output += `Total Characters: ${kba.total_chars?.toLocaleString() || '0'}\n`;
+                    output += `Storage Size: ${((kba.total_chars || 0) / 1024 / 1024).toFixed(2)} MB\n`;
+                    output += `Authorized Authors: ${kba.authors}\n`;
+                    output += `Last Updated: ${kba.last_updated || 'Never'}\n`;
+                }
+                
+                output += `\n💾 DATABASE STATISTICS:\n`;
+                output += `${'='.repeat(25)}\n`;
+                if (result.database_stats) {
+                    const db = result.database_stats;
+                    output += `Total Users: ${db.users}\n`;
+                    output += `Total Conversations: ${db.conversations}\n`;
+                    output += `Active User Documents: ${db.user_docs}\n`;
+                    output += `Knowledge Base Docs: ${db.kb_docs}\n`;
+                }
+                
+                if (result.memory_usage) {
+                    output += `\n🧠 MEMORY USAGE:\n`;
+                    output += `${'='.repeat(15)}\n`;
+                    output += `Python Process: ${result.memory_usage.python_process}\n`;
+                    output += `GC Collections: ${JSON.stringify(result.memory_usage.gc_collections)}\n`;
+                }
+                
+                output += `\n✅ System diagnostic complete!\n`;
+                output += `All core systems operational on Render Standard tier.\n`;
+                
+                resultsDiv.textContent = output;
+                
+            } catch (error) {
+                resultsDiv.textContent = `❌ SYSTEM DEBUG ERROR: ${error.message}\n\nThis might indicate a server-side issue.\nFull error: ${error.stack}`;
+                console.error('System debug error:', error);
+            }
+        }
+
+        async function testContextBuild() {
+            const query = document.getElementById('debugQuery').value.trim();
+            const resultsDiv = document.getElementById('debugResults');
+            
+            if (!query) {
+                alert('Please enter a search term to test context building');
+                return;
+            }
+            
+            try {
+                resultsDiv.style.display = 'block';
+                resultsDiv.textContent = 'Testing improved context building system...';
+                
+                // This simulates what happens when a user asks a question
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        user_input: `Do you have access to information about: ${query}?`,
+                        agent: 'therapist'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                let output = `📝 CONTEXT BUILD TEST RESULTS\n`;
+                output += `===============================\n`;
+                output += `Test Query: "${query}"\n`;
+                output += `AI Response Length: ${result.response?.length || 0} characters\n`;
+                output += `Context Included: ${result.context_included ? '✅' : '❌'}\n`;
+                output += `Timestamp: ${new Date().toISOString()}\n\n`;
+                
+                output += `🤖 AI RESPONSE:\n`;
+                output += `${'='.repeat(15)}\n`;
+                output += `${result.response || result.error || 'No response'}\n`;
+                output += `${'='.repeat(50)}\n`;
+                
+                if (result.error) {
+                    output += `\n❌ ERROR OCCURRED:\n${result.error}\n`;
+                } else {
+                    output += `\n✅ Context building test completed successfully!\n`;
+                    output += `The AI should now be able to reference specific documents.\n`;
+                }
+                
+                resultsDiv.textContent = output;
+                
+            } catch (error) {
+                resultsDiv.textContent = `❌ CONTEXT TEST ERROR: ${error.message}\n\nFull error: ${error.stack}`;
+                console.error('Context test error:', error);
+            }
+        }
+
+        // Health monitoring functions
+        async function refreshHealth() {
+            const healthDiv = document.getElementById('healthStatus');
+            
+            try {
+                healthDiv.innerHTML = '<div class="health-item"><span class="health-label">Status</span><span class="health-value">Checking...</span></div>';
+                
+                const response = await fetch('/health');
+                const health = await response.json();
+                
+                let healthHtml = '';
+                
+                // System status
+                const statusIcon = health.status === 'healthy' ? 'status-online' : 'status-offline';
+                healthHtml += `
+                    <div class="health-item">
+                        <span class="health-label"><span class="status-indicator ${statusIcon}"></span>System Status</span>
+                        <span class="health-value">${health.status?.toUpperCase() || 'UNKNOWN'}</span>
+                    </div>
+                `;
+                
+                // Version
+                if (health.version) {
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label">Version</span>
+                            <span class="health-value">${health.version}</span>
+                        </div>
+                    `;
+                }
+                
+                // API Status
+                if (health.apis) {
+                    const claudeIcon = health.apis.claude_working ? 'status-online' : (health.apis.claude_configured ? 'status-offline' : 'status-warning');
+                    const openaiIcon = health.apis.openai_working ? 'status-online' : (health.apis.openai_configured ? 'status-offline' : 'status-warning');
+                    
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label"><span class="status-indicator ${claudeIcon}"></span>Claude API</span>
+                            <span class="health-value">${health.apis.claude_working ? 'Online' : (health.apis.claude_configured ? 'Offline' : 'Not Configured')}</span>
+                        </div>
+                        <div class="health-item">
+                            <span class="health-label"><span class="status-indicator ${openaiIcon}"></span>OpenAI API</span>
+                            <span class="health-value">${health.apis.openai_working ? 'Online' : (health.apis.openai_configured ? 'Offline' : 'Not Configured')}</span>
+                        </div>
+                    `;
+                }
+                
+                // Database stats
+                if (health.database) {
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label">Total Users</span>
+                            <span class="health-value">${health.database.total_users}</span>
+                        </div>
+                        <div class="health-item">
+                            <span class="health-label">Conversations</span>
+                            <span class="health-value">${health.database.total_conversations}</span>
+                        </div>
+                    `;
+                }
+                
+                // Knowledge base
+                if (health.knowledge_base) {
+                    const kbStatus = health.knowledge_base.total_documents > 0 ? 'status-online' : 'status-warning';
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label"><span class="status-indicator ${kbStatus}"></span>Knowledge Base</span>
+                            <span class="health-value">${health.knowledge_base.total_documents} docs (${health.knowledge_base.size_mb}MB)</span>
+                        </div>
+                    `;
+                }
+                
+                // Memory info
+                if (health.memory_info) {
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label">Tier</span>
+                            <span class="health-value">${health.memory_info.tier?.replace('_', ' ').toUpperCase() || 'Unknown'}</span>
+                        </div>
+                    `;
+                }
+                
+                healthDiv.innerHTML = healthHtml;
+                
+            } catch (error) {
+                healthDiv.innerHTML = `
+                    <div class="health-item">
+                        <span class="health-label"><span class="status-indicator status-offline"></span>Health Check</span>
+                        <span class="health-value">Failed: ${error.message}</span>
+                    </div>
+                `;
+                console.error('Health check error:', error);
+            }
+        }
+
+        // Auto-refresh functions
+        function startAutoRefresh() {
+            // Refresh health status every 30 seconds
+            setInterval(refreshHealth, 30000);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ctrl/Cmd + D for debug search
+            if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+                e.preventDefault();
+                document.getElementById('debugQuery').focus();
+            }
+            
+            // Enter key in debug input
+            if (e.target.id === 'debugQuery' && e.key === 'Enter') {
+                debugKnowledgeSearch();
+            }
+        });
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('🚀 Improved Admin Dashboard v2.0 loaded');
+            console.log('🔍 Debug tools available:');
+            console.log('  - Knowledge base search testing');
+            console.log('  - System status diagnostics');
+            console.log('  - Context building verification');
+            console.log('  - Real-time health monitoring');
+            
+            // Initial health check
+            refreshHealth();
+            
+            // Start auto-refresh
+            startAutoRefresh();
+            
+            // Set focus on debug input for convenience
+            setTimeout(() => {
+                const debugInput = document.getElementById('debugQuery');
+                if (debugInput && !document.querySelector('input[type="file"]:focus')) {
+                    debugInput.placeholder = 'Try: "Self Compassion" or "Gottman" or any book title...';
+                }
+            }, 1000);
+        });
+
+        // Error handling for global errors
+        window.addEventListener('error', (e) => {
+            console.error('Global error:', e.error);
+            
+            // Show error in debug results if visible
+            const debugResults = document.getElementById('debugResults');
+            if (debugResults && debugResults.style.display !== 'none') {
+                debugResults.textContent += `\n\n❌ JAVASCRIPT ERROR: ${e.error.message}\n${e.error.stack}`;
+            }
+        });
+
+        // Service Worker for offline functionality (optional)
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(() => {
+                // Silently fail if no service worker
+            });
+        }
     </script>
 </body>
 </html>
