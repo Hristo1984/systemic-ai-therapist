@@ -1212,24 +1212,19 @@ def rebuild_vector_index():
     """ADMIN ONLY: Rebuild vector index for all documents"""
     if not is_admin_user():
         return jsonify({"error": "Admin access required"}), 403
-    
+
     try:
         print("🔧 REBUILD INDEX: Starting complete vector index rebuild...")
-        
+
         # Get all documents from database
         with get_db_connection() as conn:
-            admin_docs = conn.execute('''
-                SELECT * FROM knowledge_base_docs
-            ''').fetchall()
-            
-            user_docs = conn.execute('''
-                SELECT * FROM user_documents WHERE is_active = 1
-            ''').fetchall()
-        
+            admin_docs = conn.execute('SELECT * FROM knowledge_base_docs').fetchall()
+            user_docs = conn.execute('SELECT * FROM user_documents WHERE is_active = 1').fetchall()
+
         # Load knowledge base for admin documents content
         knowledge_base = load_knowledge_base()
         admin_content_map = {doc['id']: doc for doc in knowledge_base['documents']}
-        
+
         rebuild_stats = {
             "admin_docs_processed": 0,
             "user_docs_processed": 0,
@@ -1238,7 +1233,7 @@ def rebuild_vector_index():
             "total_chunks_created": 0,
             "errors": []
         }
-        
+
         # Clear existing collections
         try:
             if chroma_client:
@@ -1247,22 +1242,19 @@ def rebuild_vector_index():
                 print("🗑️ Cleared existing vector collections")
         except Exception as e:
             print(f"⚠️ Error clearing collections: {e}")
-        
+
         # Rebuild admin knowledge base
         print(f"📚 Rebuilding admin KB: {len(admin_docs)} documents")
         for doc_row in admin_docs:
             doc_id = doc_row['id']
             filename = doc_row['filename']
-            
+
             if doc_id in admin_content_map:
                 content = admin_content_map[doc_id]['content']
-                success = add_document_to_vector_store(
-                    doc_id, filename, content, "admin_kb"
-                )
-                
+                success = add_document_to_vector_store(doc_id, filename, content, "admin_kb")
+
                 if success:
                     rebuild_stats["admin_docs_processed"] += 1
-                    # Update database
                     with get_db_connection() as conn:
                         conn.execute(
                             'UPDATE knowledge_base_docs SET vector_indexed = 1 WHERE id = ?',
@@ -1272,7 +1264,7 @@ def rebuild_vector_index():
                 else:
                     rebuild_stats["admin_docs_failed"] += 1
                     rebuild_stats["errors"].append(f"Failed to index admin doc: {filename}")
-        
+
         # Rebuild user documents
         print(f"👤 Rebuilding user docs: {len(user_docs)} documents")
         for doc_row in user_docs:
@@ -1280,14 +1272,11 @@ def rebuild_vector_index():
             filename = doc_row['filename']
             content = doc_row['content']
             user_id = doc_row['user_id']
-            
-            success = add_document_to_vector_store(
-                doc_id, filename, content, "user_docs", user_id
-            )
-            
+
+            success = add_document_to_vector_store(doc_id, filename, content, "user_docs", user_id)
+
             if success:
                 rebuild_stats["user_docs_processed"] += 1
-                # Update database
                 with get_db_connection() as conn:
                     conn.execute(
                         'UPDATE user_documents SET vector_indexed = 1 WHERE id = ?',
@@ -1297,14 +1286,20 @@ def rebuild_vector_index():
             else:
                 rebuild_stats["user_docs_failed"] += 1
                 rebuild_stats["errors"].append(f"Failed to index user doc: {filename}")
-        
+
         print(f"✅ REBUILD COMPLETE: {rebuild_stats}")
-        
+
         return jsonify({
             "success": True,
             "message": "Vector index rebuild completed",
             "stats": rebuild_stats
         })
+
+    except Exception as e:
+        error_msg = f"Rebuild index error: {str(e)}"
+        print(f"❌ {error_msg}")
+        traceback.print_exc()
+        return jsonify({"error": error_msg}), 500
 
     @app.route("/admin/debug-system", methods=["GET"])
 def debug_system_status():
