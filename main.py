@@ -121,12 +121,16 @@ def get_openai_embedding(text: str, model: str = "text-embedding-3-small") -> Op
         if not openai_api_key:
             print("❌ OpenAI API key not available for embeddings")
             return None
-            
-        response = openai.embeddings.create(
+
+        from openai import OpenAI
+        client = OpenAI(api_key=openai_api_key)
+
+        response = client.embeddings.create(
             model=model,
             input=text
         )
         return response.data[0].embedding
+
     except Exception as e:
         print(f"❌ OpenAI embedding error: {e}")
         return None
