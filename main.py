@@ -64,9 +64,7 @@ if not claude_api_key:
 if not admin_password:
     print("WARNING: ADMIN_PASSWORD not found in environment variables")
 
-# Initialize OpenAI
-if openai_api_key:
-    openai.api_key = openai_api_key
+# OpenAI client initialized per-request in get_openai_embedding function
 
 # File paths
 DATABASE_FILE = "therapeutic_ai.db"
