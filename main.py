@@ -1451,10 +1451,11 @@ def debug_knowledge_search():
         
         # Add document summaries
         for doc in knowledge_base.get("documents", [])[:10]:  # First 10 docs
-            doc_summary = {
-                "filename": doc.get("filename", "Unknown"),
-                "character_count": doc.get("character_count", 0),
-      
+    doc_summary = {
+        "filename": doc.get("filename", "unknown"),
+        "character_count": doc.get("character_count", 0)
+    }
+     
     except Exception as e:
         error_msg = f"Rebuild index error: {str(e)}"
         print(f"❌ {error_msg}")
