@@ -1301,101 +1301,112 @@ def rebuild_vector_index():
         traceback.print_exc()
         return jsonify({"error": error_msg}), 500
 
-    @app.route("/admin/debug-system", methods=["GET"])
-def debug_system_status():
-    """ADMIN ONLY: Complete system diagnostic"""
+@app.route("/rebuild-index", methods=["POST"])
+def rebuild_vector_index():
+    """ADMIN ONLY: Rebuild vector index for all documents"""
     if not is_admin_user():
         return jsonify({"error": "Admin access required"}), 403
-    
+
     try:
-        import psutil
-        import gc
-        
-        debug_info = {
-            "system_status": "operational",
-            "timestamp": datetime.now().isoformat(),
-            "version": "enhanced_vector_v3.0"
+        print("🔧 REBUILD INDEX: Starting complete vector index rebuild...")
+
+        # Get all documents from database
+        with get_db_connection() as conn:
+            admin_docs = conn.execute(
+                'SELECT * FROM knowledge_base_docs'
+            ).fetchall()
+            user_docs = conn.execute(
+                'SELECT * FROM user_documents WHERE is_active = 1'
+            ).fetchall()
+
+        # Load knowledge base content for admin docs
+        knowledge_base = load_knowledge_base()
+        admin_content_map = {doc['id']: doc for doc in knowledge_base.get('documents', [])}
+
+        rebuild_stats = {
+            "admin_docs_processed": 0,
+            "user_docs_processed": 0,
+            "admin_docs_failed": 0,
+            "user_docs_failed": 0,
+            "total_chunks_created": 0,
+            "errors": []
         }
-        
-        # Check directories
-        directories = {}
-        for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs", CHROMA_PERSIST_DIR]:
-            try:
-                directories[directory] = {
-                    "exists": os.path.exists(directory),
-                    "writable": os.access(directory, os.W_OK) if os.path.exists(directory) else False,
-                    "contents": len(os.listdir(directory)) if os.path.exists(directory) else 0
-                }
-            except Exception as e:
-                directories[directory] = {"exists": False, "error": str(e)}
-        
-        debug_info["directories"] = directories
-        
-        # Check knowledge base file
+
+        # Clear existing collections in ChromaDB
         try:
-            kb_file_exists = os.path.exists(KNOWLEDGE_BASE_FILE)
-            kb_file_size = os.path.getsize(KNOWLEDGE_BASE_FILE) if kb_file_exists else 0
-            debug_info["knowledge_base_file"] = {
-                "file_exists": kb_file_exists,
-                "file_size": kb_file_size,
-                "readable": os.access(KNOWLEDGE_BASE_FILE, os.R_OK) if kb_file_exists else False
-            }
+            if chroma_client:
+                chroma_client.delete_collection("admin_kb")
+                chroma_client.delete_collection("user_docs")
+                print("🗑️ Cleared existing vector collections")
         except Exception as e:
-            debug_info["knowledge_base_file"] = {"error": str(e)}
-        
-        # Knowledge base analysis
-        try:
-            knowledge_base = load_knowledge_base()
-            debug_info["knowledge_base_analysis"] = {
-                "total_docs": len(knowledge_base.get("documents", [])),
-                "total_chars": knowledge_base.get("total_characters", 0),
-                "authors": len(knowledge_base.get("authorized_authors", [])),
-                "last_updated": knowledge_base.get("last_updated")
-            }
-        except Exception as e:
-            debug_info["knowledge_base_analysis"] = {"error": str(e)}
-        
-        # Database stats
-        try:
-            with get_db_connection() as conn:
-                users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
-                conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
-                user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
-                kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()['count']
-                
-                debug_info["database_stats"] = {
-                    "users": users,
-                    "conversations": conversations,
-                    "user_docs": user_docs,
-                    "kb_docs": kb_docs
-                }
-        except Exception as e:
-            debug_info["database_stats"] = {"error": str(e)}
-        
-        # Memory usage
-        try:
-            process = psutil.Process()
-            debug_info["memory_usage"] = {
-                "python_process": f"{process.memory_info().rss / 1024 / 1024:.1f} MB",
-                "gc_collections": {
-                    "gen0": gc.get_count()[0],
-                    "gen1": gc.get_count()[1], 
-                    "gen2": gc.get_count()[2]
-                }
-            }
-        except Exception as e:
-            debug_info["memory_usage"] = {"error": str(e)}
-        
-        return jsonify(debug_info)
-        
-    except Exception as e:
-        print(f"❌ Debug system error: {e}")
-        traceback.print_exc()
+            print(f"⚠️ Error clearing collections: {e}")
+
+        # Rebuild admin knowledge base
+        print(f"📚 Rebuilding admin KB: {len(admin_docs)} documents")
+        for doc_row in admin_docs:
+            doc_id = doc_row['id']
+            filename = doc_row['filename']
+
+            if doc_id not in admin_content_map:
+                rebuild_stats["admin_docs_failed"] += 1
+                rebuild_stats["errors"].append(f"No content found for admin doc: {filename}")
+                continue
+
+            content = admin_content_map[doc_id]['content']
+            success = add_document_to_vector_store(doc_id, filename, content, "admin_kb")
+
+            if success:
+                rebuild_stats["admin_docs_processed"] += 1
+                with get_db_connection() as conn:
+                    conn.execute(
+                        'UPDATE knowledge_base_docs SET vector_indexed = 1 WHERE id = ?',
+                        (doc_id,)
+                    )
+                    conn.commit()
+            else:
+                rebuild_stats["admin_docs_failed"] += 1
+                rebuild_stats["errors"].append(f"Failed to index admin doc: {filename}")
+
+        # Rebuild user documents
+        print(f"👤 Rebuilding user docs: {len(user_docs)} documents")
+        for doc_row in user_docs:
+            doc_id = doc_row['id']
+            filename = doc_row['filename']
+            content = doc_row['content']
+            user_id = doc_row['user_id']
+
+            if not content:
+                rebuild_stats["user_docs_failed"] += 1
+                rebuild_stats["errors"].append(f"No content found for user doc: {filename}")
+                continue
+
+            success = add_document_to_vector_store(doc_id, filename, content, "user_docs", user_id)
+
+            if success:
+                rebuild_stats["user_docs_processed"] += 1
+                with get_db_connection() as conn:
+                    conn.execute(
+                        'UPDATE user_documents SET vector_indexed = 1 WHERE id = ?',
+                        (doc_id,)
+                    )
+                    conn.commit()
+            else:
+                rebuild_stats["user_docs_failed"] += 1
+                rebuild_stats["errors"].append(f"Failed to index user doc: {filename}")
+
+        print(f"✅ REBUILD COMPLETE: {rebuild_stats}")
+
         return jsonify({
-            "system_status": "error",
-            "timestamp": datetime.now().isoformat(),
-            "error": str(e)
-        }), 500
+            "success": True,
+            "message": "Vector index rebuild completed",
+            "stats": rebuild_stats
+        })
+
+    except Exception as e:
+        error_msg = f"Rebuild index error: {str(e)}"
+        print(f"❌ {error_msg}")
+        traceback.print_exc()
+        return jsonify({"error": error_msg}), 500
 
 @app.route("/debug-knowledge", methods=["POST"])
 def debug_knowledge_search():
