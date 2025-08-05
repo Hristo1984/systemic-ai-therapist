@@ -1204,102 +1204,8 @@ def is_admin_user():
     return session.get("is_admin", False)
 
 # ================================
-# NEW VECTOR STORE ADMIN ROUTES
+# ENHANCED VECTOR STORE ADMIN ROUTES
 # ================================
-
-@app.route("/rebuild-index", methods=["POST"])
-def rebuild_vector_index():
-    """ADMIN ONLY: Rebuild vector index for all documents"""
-    if not is_admin_user():
-        return jsonify({"error": "Admin access required"}), 403
-
-    try:
-        print("🔧 REBUILD INDEX: Starting complete vector index rebuild...")
-
-        # Get all documents from database
-        with get_db_connection() as conn:
-            admin_docs = conn.execute('SELECT * FROM knowledge_base_docs').fetchall()
-            user_docs = conn.execute('SELECT * FROM user_documents WHERE is_active = 1').fetchall()
-
-        # Load knowledge base for admin documents content
-        knowledge_base = load_knowledge_base()
-        admin_content_map = {doc['id']: doc for doc in knowledge_base['documents']}
-
-        rebuild_stats = {
-            "admin_docs_processed": 0,
-            "user_docs_processed": 0,
-            "admin_docs_failed": 0,
-            "user_docs_failed": 0,
-            "total_chunks_created": 0,
-            "errors": []
-        }
-
-        # Clear existing collections
-        try:
-            if chroma_client:
-                chroma_client.delete_collection("admin_kb")
-                chroma_client.delete_collection("user_docs")
-                print("🗑️ Cleared existing vector collections")
-        except Exception as e:
-            print(f"⚠️ Error clearing collections: {e}")
-
-        # Rebuild admin knowledge base
-        print(f"📚 Rebuilding admin KB: {len(admin_docs)} documents")
-        for doc_row in admin_docs:
-            doc_id = doc_row['id']
-            filename = doc_row['filename']
-
-            if doc_id in admin_content_map:
-                content = admin_content_map[doc_id]['content']
-                success = add_document_to_vector_store(doc_id, filename, content, "admin_kb")
-
-                if success:
-                    rebuild_stats["admin_docs_processed"] += 1
-                    with get_db_connection() as conn:
-                        conn.execute(
-                            'UPDATE knowledge_base_docs SET vector_indexed = 1 WHERE id = ?',
-                            (doc_id,)
-                        )
-                        conn.commit()
-                else:
-                    rebuild_stats["admin_docs_failed"] += 1
-                    rebuild_stats["errors"].append(f"Failed to index admin doc: {filename}")
-
-        # Rebuild user documents
-        print(f"👤 Rebuilding user docs: {len(user_docs)} documents")
-        for doc_row in user_docs:
-            doc_id = doc_row['id']
-            filename = doc_row['filename']
-            content = doc_row['content']
-            user_id = doc_row['user_id']
-
-            success = add_document_to_vector_store(doc_id, filename, content, "user_docs", user_id)
-
-            if success:
-                rebuild_stats["user_docs_processed"] += 1
-                with get_db_connection() as conn:
-                    conn.execute(
-                        'UPDATE user_documents SET vector_indexed = 1 WHERE id = ?',
-                        (doc_id,)
-                    )
-                    conn.commit()
-            else:
-                rebuild_stats["user_docs_failed"] += 1
-                rebuild_stats["errors"].append(f"Failed to index user doc: {filename}")
-
-        print(f"✅ REBUILD COMPLETE: {rebuild_stats}")
-
-        return jsonify({
-            "success": True,
-            "message": "Vector index rebuild completed",
-            "stats": rebuild_stats
-        })
-
-    except Exception as e:
-        error_msg = f"Rebuild index error: {str(e)}"
-        print(f"❌ {error_msg}")
-        traceback.print_exc()
-        return jsonify({"error": error_msg}), 500
 
 @app.route("/rebuild-index", methods=["POST"])
 def rebuild_vector_index():
@@ -1449,65 +1355,7 @@ def debug_knowledge_search():
             }
         }
         
-        # Add document summaries
-doc_summaries = []
-
-for doc in knowledge_base.get("documents", [])[:10]:  # First 10 docs
-    doc_summary = {
-        "filename": doc.get("filename", "Unknown"),
-        "character_count": doc.get("character_count", 0)
-    }
-    doc_summaries.append(doc_summary)
-
-debug_info["document_summaries"] = doc_summaries
-
-    except Exception as e:
-        error_msg = f"Rebuild index error: {str(e)}"
-        print(f"❌ {error_msg}")
-        traceback.print_exc()
-        return jsonify({"error": error_msg}), 500
-        @app.route("/debug-knowledge", methods=["POST"])
-def debug_knowledge_search():
-    """ADMIN ONLY: Debug knowledge base search functionality"""
-    if not is_admin_user():
-        return jsonify({"error": "Admin access required"}), 403
-    
-    try:
-        data = request.get_json()
-        query = data.get("query", "")
-        
-        if not query:
-            return jsonify({"error": "Query parameter required"}), 400
-        
-        print(f"🔍 DEBUG KNOWLEDGE: Testing search for '{query}'")
-        
-        # Load knowledge base
-        knowledge_base = load_knowledge_base()
-        
-        # Test vector search
-        admin_results = query_vector_store(query, "admin_kb", n_results=5)
-        
-        # Test retrieval system
-        test_user_id = "debug-test-user"
-        retrieval_result = retrieve_relevant_context(test_user_id, query, max_tokens=5000)
-        
-        debug_response = {
-            "search_query": query,
-            "timestamp": datetime.now().isoformat(),
-            "total_documents": len(knowledge_base.get("documents", [])),
-            "vector_results_count": len(admin_results),
-            "generated_context_length": len(retrieval_result.get("context", "")),
-            "all_documents": [],
-            "vector_results": [],
-            "context_preview": retrieval_result.get("context", "")[:1000] + "..." if len(retrieval_result.get("context", "")) > 1000 else retrieval_result.get("context", ""),
-            "knowledge_base_stats": {
-                "total_characters": knowledge_base.get("total_characters", 0),
-                "total_authors": len(knowledge_base.get("authorized_authors", [])),
-                "last_updated": knowledge_base.get("last_updated")
-            }
-        }
-        
-        # Add document summaries
+        # Add document summaries - FIXED INDENTATION
         for doc in knowledge_base.get("documents", [])[:10]:  # First 10 docs
             doc_summary = {
                 "filename": doc.get("filename", "Unknown"),
@@ -1534,6 +1382,247 @@ def debug_knowledge_search():
         traceback.print_exc()
         return jsonify({
             "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route("/debug-kb-status", methods=["GET"])
+def debug_kb_status():
+    """ADMIN ONLY: Complete knowledge base diagnostic"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        print("🔍 KNOWLEDGE BASE DIAGNOSTIC: Starting comprehensive check...")
+        
+        # Check knowledge base file
+        kb_file_exists = os.path.exists(KNOWLEDGE_BASE_FILE)
+        kb_file_size = os.path.getsize(KNOWLEDGE_BASE_FILE) if kb_file_exists else 0
+        
+        # Load knowledge base
+        knowledge_base = load_knowledge_base()
+        
+        # Check ChromaDB connection
+        chroma_status = {
+            "client_initialized": chroma_client is not None,
+            "admin_collection": None,
+            "user_collection": None
+        }
+        
+        if chroma_client:
+            try:
+                admin_collection = get_or_create_collection("admin_kb")
+                chroma_status["admin_collection"] = admin_collection is not None
+                if admin_collection:
+                    chroma_status["admin_collection_count"] = admin_collection.count()
+            except Exception as e:
+                chroma_status["admin_collection_error"] = str(e)
+            
+            try:
+                user_collection = get_or_create_collection("user_docs") 
+                chroma_status["user_collection"] = user_collection is not None
+                if user_collection:
+                    chroma_status["user_collection_count"] = user_collection.count()
+            except Exception as e:
+                chroma_status["user_collection_error"] = str(e)
+        
+        # Check database
+        db_stats = {}
+        try:
+            with get_db_connection() as conn:
+                db_stats = {
+                    "kb_docs_total": conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()['count'],
+                    "kb_docs_indexed": conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs WHERE vector_indexed = 1').fetchone()['count'],
+                    "user_docs_total": conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count'],
+                    "user_docs_indexed": conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE vector_indexed = 1 AND is_active = 1').fetchone()['count']
+                }
+        except Exception as e:
+            db_stats["error"] = str(e)
+        
+        # Test embeddings
+        embedding_test = {}
+        try:
+            test_embedding = get_openai_embedding("test query for diagnostic")
+            embedding_test = {
+                "openai_api_working": test_embedding is not None,
+                "embedding_dimensions": len(test_embedding) if test_embedding else 0
+            }
+        except Exception as e:
+            embedding_test = {
+                "openai_api_working": False,
+                "error": str(e)
+            }
+        
+        # Test vector search
+        vector_search_test = {}
+        try:
+            test_results = query_vector_store("therapy", "admin_kb", n_results=3)
+            vector_search_test = {
+                "search_working": True,
+                "results_count": len(test_results),
+                "sample_result": test_results[0] if test_results else None
+            }
+        except Exception as e:
+            vector_search_test = {
+                "search_working": False,
+                "error": str(e)
+            }
+        
+        diagnostic_report = {
+            "timestamp": datetime.now().isoformat(),
+            "knowledge_base_file": {
+                "exists": kb_file_exists,
+                "size_bytes": kb_file_size,
+                "size_mb": round(kb_file_size / 1024 / 1024, 2),
+                "path": KNOWLEDGE_BASE_FILE
+            },
+            "knowledge_base_content": {
+                "total_documents": len(knowledge_base.get("documents", [])),
+                "total_characters": knowledge_base.get("total_characters", 0),
+                "total_authors": len(knowledge_base.get("authorized_authors", [])),
+                "last_updated": knowledge_base.get("last_updated"),
+                "sample_documents": [
+                    {
+                        "filename": doc.get("filename", "Unknown"),
+                        "characters": doc.get("character_count", 0),
+                        "authors": doc.get("extracted_authors", [])
+                    }
+                    for doc in knowledge_base.get("documents", [])[:3]
+                ]
+            },
+            "vector_store": chroma_status,
+            "database": db_stats,
+            "embeddings": embedding_test,
+            "vector_search": vector_search_test,
+            "api_keys": {
+                "openai_configured": openai_api_key is not None,
+                "claude_configured": claude_api_key is not None
+            },
+            "directories": {
+                "core_memory": os.path.exists(CORE_MEMORY_DIR),
+                "chroma_db": os.path.exists(CHROMA_PERSIST_DIR),
+                "uploads": os.path.exists(UPLOADS_DIR)
+            }
+        }
+        
+        # Identify issues
+        issues = []
+        if not kb_file_exists:
+            issues.append("❌ Knowledge base file not found")
+        if len(knowledge_base.get("documents", [])) == 0:
+            issues.append("❌ No documents in knowledge base")
+        if not chroma_status["client_initialized"]:
+            issues.append("❌ ChromaDB not initialized")
+        if not embedding_test.get("openai_api_working", False):
+            issues.append("❌ OpenAI embeddings not working")
+        if not vector_search_test.get("search_working", False):
+            issues.append("❌ Vector search not working")
+        if db_stats.get("kb_docs_indexed", 0) == 0:
+            issues.append("⚠️ No knowledge base documents indexed")
+        
+        diagnostic_report["issues"] = issues
+        diagnostic_report["status"] = "HEALTHY" if len(issues) == 0 else "ISSUES_FOUND"
+        
+        print(f"🔍 DIAGNOSTIC COMPLETE: {diagnostic_report['status']}")
+        return jsonify(diagnostic_report)
+        
+    except Exception as e:
+        print(f"❌ Diagnostic error: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "status": "DIAGNOSTIC_FAILED"
+        }), 500
+
+@app.route("/force-rebuild-kb", methods=["POST"])
+def force_rebuild_kb():
+    """ADMIN ONLY: Force complete rebuild of knowledge base and vector indexes"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        print("🔧 FORCE REBUILD: Starting complete knowledge base rebuild...")
+        
+        # Step 1: Clear vector collections
+        try:
+            if chroma_client:
+                try:
+                    chroma_client.delete_collection("admin_kb")
+                    print("🗑️ Deleted admin_kb collection")
+                except:
+                    pass
+                try:
+                    chroma_client.delete_collection("user_docs")
+                    print("🗑️ Deleted user_docs collection")
+                except:
+                    pass
+        except Exception as e:
+            print(f"⚠️ Error clearing collections: {e}")
+        
+        # Step 2: Get all documents from database and knowledge base
+        knowledge_base = load_knowledge_base()
+        rebuild_stats = {
+            "total_docs_found": len(knowledge_base.get("documents", [])),
+            "docs_processed": 0,
+            "docs_failed": 0,
+            "errors": []
+        }
+        
+        # Step 3: Rebuild vector indexes for each document
+        for doc in knowledge_base.get("documents", []):
+            try:
+                doc_id = doc.get("id", str(uuid.uuid4()))
+                filename = doc.get("filename", "Unknown")
+                content = doc.get("content", "")
+                
+                if content:
+                    # Add to vector store
+                    success = add_document_to_vector_store(
+                        doc_id, filename, content, "admin_kb"
+                    )
+                    
+                    if success:
+                        rebuild_stats["docs_processed"] += 1
+                        print(f"✅ Rebuilt: {filename}")
+                        
+                        # Update database
+                        try:
+                            with get_db_connection() as conn:
+                                conn.execute('''
+                                    UPDATE knowledge_base_docs 
+                                    SET vector_indexed = 1 
+                                    WHERE filename = ?
+                                ''', (filename,))
+                                conn.commit()
+                        except Exception as db_e:
+                            print(f"⚠️ DB update error for {filename}: {db_e}")
+                    else:
+                        rebuild_stats["docs_failed"] += 1
+                        rebuild_stats["errors"].append(f"Failed to index: {filename}")
+                else:
+                    rebuild_stats["docs_failed"] += 1
+                    rebuild_stats["errors"].append(f"No content found: {filename}")
+                    
+            except Exception as e:
+                rebuild_stats["docs_failed"] += 1
+                rebuild_stats["errors"].append(f"Error processing {filename}: {str(e)}")
+                print(f"❌ Error processing {filename}: {e}")
+        
+        print(f"🔧 REBUILD COMPLETE: {rebuild_stats}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Knowledge base force rebuild completed",
+            "stats": rebuild_stats,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"❌ Force rebuild error: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "success": False,
             "timestamp": datetime.now().isoformat()
         }), 500
 
@@ -2577,6 +2666,8 @@ def initialize_enhanced_system():
     print("🛠️ Admin Debug Tools:")
     print("   - POST /rebuild-index - Rebuild all vector indexes")
     print("   - GET /debug-retrieval?query=... - Test retrieval system")
+    print("   - GET /debug-kb-status - Complete knowledge base diagnostic")
+    print("   - POST /force-rebuild-kb - Force complete rebuild")
     print("   - Enhanced health endpoint with vector diagnostics")
     print("   - Real-time chunk and relevance logging")
 
