@@ -11,7 +11,7 @@ pdfplumber==0.10.4
 psutil==5.9.8
 
 # AI/ML Dependencies
-openai==1.51.2
+openai==1.35.15
 tiktoken==0.8.0
 
 # Vector Store & Embeddings
