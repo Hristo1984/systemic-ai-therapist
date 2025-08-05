@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Therapeutic AI (Improved)</title>
+    <title>Admin Dashboard - Therapeutic AI (Enhanced Vector)</title>
     <style>
         * {
             margin: 0;
@@ -144,6 +144,11 @@
             color: #ff9800;
         }
         
+        .rebuild-icon {
+            background: rgba(255, 152, 0, 0.1);
+            color: #ff9800;
+        }
+        
         .batch-icon {
             background: rgba(127, 176, 105, 0.1);
             color: #7FB069;
@@ -218,6 +223,30 @@
         }
         
         .upload-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .rebuild-btn {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 16px;
+        }
+        
+        .rebuild-btn:hover {
+            background: #f57c00;
+            transform: translateY(-1px);
+        }
+        
+        .rebuild-btn:disabled {
             background: #ccc;
             cursor: not-allowed;
             transform: none;
@@ -355,18 +384,24 @@
         
         .progress-bar {
             width: 100%;
-            height: 6px;
+            height: 20px;
             background: #e8ecf0;
-            border-radius: 3px;
+            border-radius: 10px;
             overflow: hidden;
             margin-top: 12px;
         }
         
         .progress-fill {
             height: 100%;
-            background: #4A90B8;
+            background: linear-gradient(90deg, #4A90B8, #7FB069);
             width: 0%;
             transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
         }
         
         .health-status {
@@ -472,7 +507,7 @@
                 <div class="brand-icon">🔒</div>
                 <div class="brand-text">
                     <h1>Admin Dashboard</h1>
-                    <span class="version-badge">IMPROVED v2.0</span>
+                    <span class="version-badge">ENHANCED VECTOR v3.0</span>
                 </div>
                 <div class="admin-badge">ADMIN</div>
             </div>
@@ -500,7 +535,7 @@
                     </div>
                     <p style="color: #90a4ae; font-size: 14px; margin-bottom: 16px;">
                         Upload one PDF book or research paper (up to 200MB)<br>
-                        <strong>Improved:</strong> Better extraction, up to 2000 pages
+                        <strong>Enhanced:</strong> Vector indexing + semantic search
                     </p>
                     <button id="uploadBtn" class="upload-btn">
                         📤 Upload to Knowledge Base
@@ -521,12 +556,12 @@
                 </div>
                 
                 <p style="color: #546e7a; margin-bottom: 16px; font-size: 14px;">
-                    Test the improved knowledge base search and context building system
+                    Test the enhanced vector search and semantic retrieval system
                 </p>
                 
                 <div class="debug-section">
                     <input type="text" id="debugQuery" class="debug-input" 
-                           placeholder="Enter book title or search term (e.g., 'Self Compassion')" />
+                           placeholder="Enter book title or search term (e.g., 'family therapy')" />
                     
                     <div>
                         <button onclick="debugKnowledgeSearch()" class="debug-btn">
@@ -546,11 +581,43 @@
                 <div class="feature-list">
                     <h4>Debug Features:</h4>
                     <ul>
-                        <li>Advanced search algorithm testing</li>
+                        <li>Vector search algorithm testing</li>
+                        <li>Semantic similarity scoring</li>
                         <li>Real-time context building analysis</li>
-                        <li>System health diagnostics</li>
-                        <li>Knowledge base integrity checks</li>
+                        <li>OpenAI embedding diagnostics</li>
                     </ul>
+                </div>
+            </div>
+
+            <!-- NEW: Rebuild Vector Index Section -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <div class="card-icon rebuild-icon">🔧</div>
+                    <h2 class="card-title">Rebuild Vector Index</h2>
+                </div>
+                
+                <p style="color: #546e7a; margin-bottom: 16px; font-size: 14px;">
+                    Rebuild vector embeddings for all uploaded books. Use this after deploying or if search isn't finding your books.
+                </p>
+                
+                <div class="feature-list">
+                    <h4>What This Does:</h4>
+                    <ul>
+                        <li>Scans all uploaded books in database</li>
+                        <li>Creates OpenAI embeddings for semantic search</li>
+                        <li>Rebuilds ChromaDB vector indexes</li>
+                        <li>Restores AI access to your book library</li>
+                    </ul>
+                </div>
+                
+                <button onclick="rebuildVectorIndex()" class="rebuild-btn" id="rebuildBtn">
+                    🔧 Rebuild All Vector Indexes
+                </button>
+                
+                <div id="rebuildStatus" class="status-message" style="display: none;"></div>
+                
+                <div id="rebuildProgress" class="progress-bar" style="display: none;">
+                    <div class="progress-fill" id="rebuildProgressFill">0%</div>
                 </div>
             </div>
 
@@ -562,7 +629,7 @@
                 </div>
                 
                 <p style="color: #546e7a; margin-bottom: 16px;">
-                    Upload multiple large therapeutic books at once with improved processing and monitoring.
+                    Upload multiple large therapeutic books at once with enhanced vector indexing.
                 </p>
                 
                 <div class="feature-list">
@@ -570,10 +637,9 @@
                     <ul>
                         <li>Support for 200MB+ PDFs</li>
                         <li>Up to 2000 pages per document</li>
-                        <li>Improved author extraction patterns</li>
-                        <li>Better error handling and recovery</li>
-                        <li>Real-time progress tracking</li>
-                        <li>Detailed processing logs</li>
+                        <li>Automatic vector embedding creation</li>
+                        <li>Real-time semantic indexing</li>
+                        <li>Progress tracking with embedding status</li>
                     </ul>
                 </div>
                 
@@ -613,12 +679,12 @@
                 </div>
                 
                 <div class="feature-list">
-                    <h4>System Capabilities:</h4>
+                    <h4>Vector Search Capabilities:</h4>
                     <ul>
-                        <li>Advanced search with title matching</li>
+                        <li>Semantic similarity matching</li>
                         <li>Up to 1MB context per document</li>
-                        <li>Intelligent author extraction</li>
-                        <li>Persistent storage on Render Standard</li>
+                        <li>Relevance scoring (0.0-1.0)</li>
+                        <li>Multi-book cross-referencing</li>
                     </ul>
                 </div>
             </div>
@@ -644,7 +710,7 @@
                 
                 {% if authorized_authors %}
                 <div style="margin-top: 12px; font-size: 12px; color: #90a4ae; text-align: center;">
-                    AI can reference these {{ authorized_authors | length }} therapeutic experts in conversations
+                    AI can reference these {{ authorized_authors | length }} therapeutic experts with semantic search
                 </div>
                 {% endif %}
             </div>
@@ -668,13 +734,12 @@
                 </button>
                 
                 <div class="feature-list">
-                    <h4>Monitoring:</h4>
+                    <h4>Enhanced Monitoring:</h4>
                     <ul>
-                        <li>API connectivity status</li>
-                        <li>Database health checks</li>
-                        <li>Knowledge base integrity</li>
-                        <li>Memory usage tracking</li>
-                        <li>User activity metrics</li>
+                        <li>Claude + OpenAI API status</li>
+                        <li>ChromaDB vector store health</li>
+                        <li>Embedding generation diagnostics</li>
+                        <li>Semantic search performance</li>
                     </ul>
                 </div>
             </div>
@@ -747,7 +812,7 @@
             showProgress(0);
 
             try {
-                showStatus(`Processing ${file.name} (${fileSize}MB) with improved extraction...`, true);
+                showStatus(`Processing ${file.name} (${fileSize}MB) with vector indexing...`, true);
                 showProgress(20);
 
                 const response = await fetch('/upload', {
@@ -760,11 +825,15 @@
                 showProgress(100);
 
                 if (result.success) {
-                    let message = `✅ Successfully added '${file.name}' to knowledge base`;
+                    let message = `✅ Successfully added '${file.name}' to knowledge base with vector indexing`;
                     message += `\n📊 Extracted ${result.character_count?.toLocaleString() || 'unknown'} characters`;
                     
                     if (result.extracted_authors && result.extracted_authors.length > 0) {
                         message += `\n👨‍⚕️ Authors: ${result.extracted_authors.join(', ')}`;
+                    }
+                    
+                    if (result.vector_indexed) {
+                        message += `\n🔍 Vector indexing: Success`;
                     }
                     
                     showStatus(message, true);
@@ -785,6 +854,84 @@
             }
         });
 
+        // NEW: Rebuild Vector Index Function
+        async function rebuildVectorIndex() {
+            const rebuildBtn = document.getElementById('rebuildBtn');
+            const rebuildStatus = document.getElementById('rebuildStatus');
+            const rebuildProgress = document.getElementById('rebuildProgress');
+            const progressFill = document.getElementById('rebuildProgressFill');
+            
+            // Show loading state
+            rebuildBtn.disabled = true;
+            rebuildBtn.textContent = '🔄 Rebuilding Indexes...';
+            rebuildStatus.style.display = 'block';
+            rebuildStatus.className = 'status-message status-success';
+            rebuildStatus.textContent = 'Starting vector index rebuild...';
+            rebuildProgress.style.display = 'block';
+            
+            // Animate progress bar
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 2;
+                if (progress <= 90) {
+                    progressFill.style.width = progress + '%';
+                    progressFill.textContent = progress + '%';
+                }
+            }, 500);
+            
+            try {
+                const response = await fetch('/rebuild-index', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                // Complete progress
+                clearInterval(progressInterval);
+                progressFill.style.width = '100%';
+                progressFill.textContent = '100%';
+                
+                if (result.success) {
+                    rebuildStatus.className = 'status-message status-success';
+                    let message = `✅ Rebuild completed successfully!\n`;
+                    message += `📚 Admin docs processed: ${result.stats.admin_docs_processed}\n`;
+                    message += `👤 User docs processed: ${result.stats.user_docs_processed}\n`;
+                    
+                    if (result.stats.admin_docs_failed > 0 || result.stats.user_docs_failed > 0) {
+                        message += `⚠️ Failed: ${result.stats.admin_docs_failed + result.stats.user_docs_failed}\n`;
+                    }
+                    
+                    rebuildStatus.textContent = message;
+                    
+                    // Refresh page after 3 seconds to update stats
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                    
+                } else {
+                    rebuildStatus.className = 'status-message status-error';
+                    rebuildStatus.textContent = `❌ Rebuild failed: ${result.error}`;
+                }
+                
+            } catch (error) {
+                clearInterval(progressInterval);
+                rebuildStatus.className = 'status-message status-error';
+                rebuildStatus.textContent = `❌ Network error: ${error.message}`;
+                console.error('Rebuild error:', error);
+            } finally {
+                rebuildBtn.disabled = false;
+                rebuildBtn.textContent = '🔧 Rebuild All Vector Indexes';
+                
+                // Hide progress bar after 5 seconds
+                setTimeout(() => {
+                    rebuildProgress.style.display = 'none';
+                }, 5000);
+            }
+        }
+
         // Debug functions
         async function debugKnowledgeSearch() {
             const query = document.getElementById('debugQuery').value.trim();
@@ -797,7 +944,7 @@
             
             try {
                 resultsDiv.style.display = 'block';
-                resultsDiv.textContent = 'Searching knowledge base with improved algorithm...';
+                resultsDiv.textContent = 'Searching knowledge base with vector search...';
                 
                 const response = await fetch('/debug-knowledge', {
                     method: 'POST',
@@ -812,7 +959,7 @@
                     return;
                 }
                 
-                let output = `🔍 IMPROVED SEARCH DEBUG RESULTS\n`;
+                let output = `🔍 VECTOR SEARCH DEBUG RESULTS\n`;
                 output += `=====================================\n`;
                 output += `Query: "${result.search_query}"\n`;
                 output += `Total Documents in KB: ${result.total_documents}\n`;
@@ -851,7 +998,7 @@
                     output += `Storage Size: ${((result.knowledge_base_stats.total_characters || 0) / 1024 / 1024).toFixed(2)} MB\n`;
                 }
                 
-                output += `\n✅ Search algorithm working with improved matching!\n`;
+                output += `\n✅ Vector search algorithm working!\n`;
                 resultsDiv.textContent = output;
                 
             } catch (error) {
@@ -875,11 +1022,11 @@
                     return;
                 }
                 
-                let output = `⚙️ COMPLETE SYSTEM STATUS DEBUG\n`;
+                let output = `⚙️ ENHANCED SYSTEM STATUS DEBUG\n`;
                 output += `=====================================\n`;
                 output += `System Status: ${result.system_status?.toUpperCase() || 'UNKNOWN'}\n`;
                 output += `Timestamp: ${result.timestamp}\n`;
-                output += `Version: Improved Therapeutic AI v2.0\n\n`;
+                output += `Version: Enhanced Vector Therapeutic AI v3.0\n\n`;
                 
                 output += `📁 DIRECTORY STATUS:\n`;
                 output += `${'='.repeat(25)}\n`;
@@ -929,8 +1076,8 @@
                     output += `GC Collections: ${JSON.stringify(result.memory_usage.gc_collections)}\n`;
                 }
                 
-                output += `\n✅ System diagnostic complete!\n`;
-                output += `All core systems operational on Render Standard tier.\n`;
+                output += `\n✅ Enhanced system diagnostic complete!\n`;
+                output += `All core systems operational with vector search.\n`;
                 
                 resultsDiv.textContent = output;
                 
@@ -951,7 +1098,7 @@
             
             try {
                 resultsDiv.style.display = 'block';
-                resultsDiv.textContent = 'Testing improved context building system...';
+                resultsDiv.textContent = 'Testing enhanced context building system...';
                 
                 // This simulates what happens when a user asks a question
                 const response = await fetch('/chat', {
@@ -970,6 +1117,7 @@
                 output += `Test Query: "${query}"\n`;
                 output += `AI Response Length: ${result.response?.length || 0} characters\n`;
                 output += `Context Included: ${result.context_included ? '✅' : '❌'}\n`;
+                output += `Vector Enhanced: ${result.retrieval_enhanced ? '✅' : '❌'}\n`;
                 output += `Timestamp: ${new Date().toISOString()}\n\n`;
                 
                 output += `🤖 AI RESPONSE:\n`;
@@ -980,8 +1128,8 @@
                 if (result.error) {
                     output += `\n❌ ERROR OCCURRED:\n${result.error}\n`;
                 } else {
-                    output += `\n✅ Context building test completed successfully!\n`;
-                    output += `The AI should now be able to reference specific documents.\n`;
+                    output += `\n✅ Enhanced context building test completed!\n`;
+                    output += `The AI should now have vector-powered access to your books.\n`;
                 }
                 
                 resultsDiv.textContent = output;
@@ -1040,6 +1188,17 @@
                     `;
                 }
                 
+                // Vector Store Status
+                if (health.vector_store) {
+                    const vectorIcon = health.vector_store.chromadb_initialized ? 'status-online' : 'status-offline';
+                    healthHtml += `
+                        <div class="health-item">
+                            <span class="health-label"><span class="status-indicator ${vectorIcon}"></span>Vector Store</span>
+                            <span class="health-value">${health.vector_store.total_indexed} indexed</span>
+                        </div>
+                    `;
+                }
+                
                 // Database stats
                 if (health.database) {
                     healthHtml += `
@@ -1061,16 +1220,6 @@
                         <div class="health-item">
                             <span class="health-label"><span class="status-indicator ${kbStatus}"></span>Knowledge Base</span>
                             <span class="health-value">${health.knowledge_base.total_documents} docs (${health.knowledge_base.size_mb}MB)</span>
-                        </div>
-                    `;
-                }
-                
-                // Memory info
-                if (health.memory_info) {
-                    healthHtml += `
-                        <div class="health-item">
-                            <span class="health-label">Tier</span>
-                            <span class="health-value">${health.memory_info.tier?.replace('_', ' ').toUpperCase() || 'Unknown'}</span>
                         </div>
                     `;
                 }
@@ -1110,12 +1259,12 @@
 
         // Initialize page
         document.addEventListener('DOMContentLoaded', () => {
-            console.log('🚀 Improved Admin Dashboard v2.0 loaded');
-            console.log('🔍 Debug tools available:');
-            console.log('  - Knowledge base search testing');
-            console.log('  - System status diagnostics');
-            console.log('  - Context building verification');
-            console.log('  - Real-time health monitoring');
+            console.log('🚀 Enhanced Vector Admin Dashboard v3.0 loaded');
+            console.log('🔍 Enhanced features available:');
+            console.log('  - Vector search testing');
+            console.log('  - Semantic similarity scoring');
+            console.log('  - ChromaDB diagnostics');
+            console.log('  - Vector index rebuilding');
             
             // Initial health check
             refreshHealth();
@@ -1127,7 +1276,7 @@
             setTimeout(() => {
                 const debugInput = document.getElementById('debugQuery');
                 if (debugInput && !document.querySelector('input[type="file"]:focus')) {
-                    debugInput.placeholder = 'Try: "Self Compassion" or "Gottman" or any book title...';
+                    debugInput.placeholder = 'Try: "family therapy" or "Minuchin" or any therapeutic concept...';
                 }
             }, 1000);
         });
@@ -1142,13 +1291,6 @@
                 debugResults.textContent += `\n\n❌ JAVASCRIPT ERROR: ${e.error.message}\n${e.error.stack}`;
             }
         });
-
-        // Service Worker for offline functionality (optional)
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {
-                // Silently fail if no service worker
-            });
-        }
     </script>
 </body>
 </html>
