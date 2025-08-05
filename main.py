@@ -1305,12 +1305,225 @@ def rebuild_vector_index():
             "message": "Vector index rebuild completed",
             "stats": rebuild_stats
         })
+
+    @app.route("/admin/debug-system", methods=["GET"])
+def debug_system_status():
+    """ADMIN ONLY: Complete system diagnostic"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        import psutil
+        import gc
+        
+        debug_info = {
+            "system_status": "operational",
+            "timestamp": datetime.now().isoformat(),
+            "version": "enhanced_vector_v3.0"
+        }
+        
+        # Check directories
+        directories = {}
+        for directory in [CORE_MEMORY_DIR, UPLOADS_DIR, USER_UPLOADS_DIR, "logs", CHROMA_PERSIST_DIR]:
+            try:
+                directories[directory] = {
+                    "exists": os.path.exists(directory),
+                    "writable": os.access(directory, os.W_OK) if os.path.exists(directory) else False,
+                    "contents": len(os.listdir(directory)) if os.path.exists(directory) else 0
+                }
+            except Exception as e:
+                directories[directory] = {"exists": False, "error": str(e)}
+        
+        debug_info["directories"] = directories
+        
+        # Check knowledge base file
+        try:
+            kb_file_exists = os.path.exists(KNOWLEDGE_BASE_FILE)
+            kb_file_size = os.path.getsize(KNOWLEDGE_BASE_FILE) if kb_file_exists else 0
+            debug_info["knowledge_base_file"] = {
+                "file_exists": kb_file_exists,
+                "file_size": kb_file_size,
+                "readable": os.access(KNOWLEDGE_BASE_FILE, os.R_OK) if kb_file_exists else False
+            }
+        except Exception as e:
+            debug_info["knowledge_base_file"] = {"error": str(e)}
+        
+        # Knowledge base analysis
+        try:
+            knowledge_base = load_knowledge_base()
+            debug_info["knowledge_base_analysis"] = {
+                "total_docs": len(knowledge_base.get("documents", [])),
+                "total_chars": knowledge_base.get("total_characters", 0),
+                "authors": len(knowledge_base.get("authorized_authors", [])),
+                "last_updated": knowledge_base.get("last_updated")
+            }
+        except Exception as e:
+            debug_info["knowledge_base_analysis"] = {"error": str(e)}
+        
+        # Database stats
+        try:
+            with get_db_connection() as conn:
+                users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+                conversations = conn.execute('SELECT COUNT(*) as count FROM conversations').fetchone()['count']
+                user_docs = conn.execute('SELECT COUNT(*) as count FROM user_documents WHERE is_active = 1').fetchone()['count']
+                kb_docs = conn.execute('SELECT COUNT(*) as count FROM knowledge_base_docs').fetchone()['count']
+                
+                debug_info["database_stats"] = {
+                    "users": users,
+                    "conversations": conversations,
+                    "user_docs": user_docs,
+                    "kb_docs": kb_docs
+                }
+        except Exception as e:
+            debug_info["database_stats"] = {"error": str(e)}
+        
+        # Memory usage
+        try:
+            process = psutil.Process()
+            debug_info["memory_usage"] = {
+                "python_process": f"{process.memory_info().rss / 1024 / 1024:.1f} MB",
+                "gc_collections": {
+                    "gen0": gc.get_count()[0],
+                    "gen1": gc.get_count()[1], 
+                    "gen2": gc.get_count()[2]
+                }
+            }
+        except Exception as e:
+            debug_info["memory_usage"] = {"error": str(e)}
+        
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        print(f"❌ Debug system error: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "system_status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
+        }), 500
+
+@app.route("/debug-knowledge", methods=["POST"])
+def debug_knowledge_search():
+    """ADMIN ONLY: Debug knowledge base search functionality"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        data = request.get_json()
+        query = data.get("query", "")
+        
+        if not query:
+            return jsonify({"error": "Query parameter required"}), 400
+        
+        print(f"🔍 DEBUG KNOWLEDGE: Testing search for '{query}'")
+        
+        # Load knowledge base
+        knowledge_base = load_knowledge_base()
+        
+        # Test vector search
+        admin_results = query_vector_store(query, "admin_kb", n_results=5)
+        
+        # Test retrieval system
+        test_user_id = "debug-test-user"
+        retrieval_result = retrieve_relevant_context(test_user_id, query, max_tokens=5000)
+        
+        debug_response = {
+            "search_query": query,
+            "timestamp": datetime.now().isoformat(),
+            "total_documents": len(knowledge_base.get("documents", [])),
+            "vector_results_count": len(admin_results),
+            "generated_context_length": len(retrieval_result.get("context", "")),
+            "all_documents": [],
+            "vector_results": [],
+            "context_preview": retrieval_result.get("context", "")[:1000] + "..." if len(retrieval_result.get("context", "")) > 1000 else retrieval_result.get("context", ""),
+            "knowledge_base_stats": {
+                "total_characters": knowledge_base.get("total_characters", 0),
+                "total_authors": len(knowledge_base.get("authorized_authors", [])),
+                "last_updated": knowledge_base.get("last_updated")
+            }
+        }
+        
+        # Add document summaries
+        for doc in knowledge_base.get("documents", [])[:10]:  # First 10 docs
+            doc_summary = {
+                "filename": doc.get("filename", "Unknown"),
+                "character_count": doc.get("characte
         
     except Exception as e:
         error_msg = f"Rebuild index error: {str(e)}"
         print(f"❌ {error_msg}")
         traceback.print_exc()
         return jsonify({"error": error_msg}), 500
+        @app.route("/debug-knowledge", methods=["POST"])
+def debug_knowledge_search():
+    """ADMIN ONLY: Debug knowledge base search functionality"""
+    if not is_admin_user():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        data = request.get_json()
+        query = data.get("query", "")
+        
+        if not query:
+            return jsonify({"error": "Query parameter required"}), 400
+        
+        print(f"🔍 DEBUG KNOWLEDGE: Testing search for '{query}'")
+        
+        # Load knowledge base
+        knowledge_base = load_knowledge_base()
+        
+        # Test vector search
+        admin_results = query_vector_store(query, "admin_kb", n_results=5)
+        
+        # Test retrieval system
+        test_user_id = "debug-test-user"
+        retrieval_result = retrieve_relevant_context(test_user_id, query, max_tokens=5000)
+        
+        debug_response = {
+            "search_query": query,
+            "timestamp": datetime.now().isoformat(),
+            "total_documents": len(knowledge_base.get("documents", [])),
+            "vector_results_count": len(admin_results),
+            "generated_context_length": len(retrieval_result.get("context", "")),
+            "all_documents": [],
+            "vector_results": [],
+            "context_preview": retrieval_result.get("context", "")[:1000] + "..." if len(retrieval_result.get("context", "")) > 1000 else retrieval_result.get("context", ""),
+            "knowledge_base_stats": {
+                "total_characters": knowledge_base.get("total_characters", 0),
+                "total_authors": len(knowledge_base.get("authorized_authors", [])),
+                "last_updated": knowledge_base.get("last_updated")
+            }
+        }
+        
+        # Add document summaries
+        for doc in knowledge_base.get("documents", [])[:10]:  # First 10 docs
+            doc_summary = {
+                "filename": doc.get("filename", "Unknown"),
+                "character_count": doc.get("character_count", 0),
+                "authors": doc.get("extracted_authors", []),
+                "content_preview": (doc.get("content", "")[:200] + "...") if len(doc.get("content", "")) > 200 else doc.get("content", "")
+            }
+            debug_response["all_documents"].append(doc_summary)
+        
+        # Add vector search results
+        for result in admin_results[:5]:
+            vector_result = {
+                "filename": result["metadata"].get("filename", "Unknown"),
+                "similarity": result["similarity"],
+                "chunk_index": result["metadata"].get("chunk_index", 0),
+                "preview": result["text"][:200] + "..." if len(result["text"]) > 200 else result["text"]
+            }
+            debug_response["vector_results"].append(vector_result)
+        
+        return jsonify(debug_response)
+        
+    except Exception as e:
+        print(f"❌ Debug knowledge search error: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route("/debug-retrieval", methods=["GET"])
 def debug_retrieval():
